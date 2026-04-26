@@ -17,8 +17,27 @@
 
 ## Usage (CLI Alpha)
 ```bash
+export WQC_NODE_PRIVATE_KEY="<base64-encoded-32-byte-ed25519-seed>"
+export WQC_ALLOWED_ORCHESTRATOR_PUBKEYS="<orchestrator_pubkey_1_b64>,<orchestrator_pubkey_2_b64>"
+# Optional only for local testing:
+# export WQC_DEV_MODE=true
 ./wqc-node start --wallet <YOUR_WQC_ADDRESS> --intensity high
 ```
+
+`WQC_NODE_PRIVATE_KEY` is required. The node signs webhook payloads using Ed25519 and sends:
+- `X-WQC-Node-PublicKey`
+- `X-WQC-Timestamp`
+- `X-WQC-Nonce`
+- `X-WQC-Signature`
+
+`/submit` now requires request signature verification by default. The node validates:
+- `X-WQC-Orchestrator-PublicKey`
+- `X-WQC-Timestamp`
+- `X-WQC-Nonce`
+- `X-WQC-Signature`
+
+Signature message format for `/submit` is:
+`WQC-REQUEST-V1\n{timestamp}\n{nonce}\n{sha256(body_hex)}`
 
 ## Community
 Join the swarm on [Discord]() or [X]().
