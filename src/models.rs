@@ -38,3 +38,15 @@ pub struct WebhookPayload {
     pub proof: Option<Proof>,
     pub error: Option<String>,
 }
+
+#[derive(Debug, Serialize)]
+pub struct NodeStatus {
+    pub node_public_key: String,
+    pub pending_tasks: usize,
+    pub max_qubits: usize,
+    pub max_memory_kb: u32,
+    pub system_memory_used_kb: u64,
+    pub system_memory_total_kb: u64,
+    pub cpu_usage_percent: f32,
+    pub supported_gates: Vec<String>,
+}
