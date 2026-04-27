@@ -31,36 +31,56 @@ async fn process_task(
     let task_id = task.task_id.clone();
     let webhook_url = task.webhook_url.clone();
 
-    tracing::info!("Worker: Processing task {}", task_id);
+    // Retrieve the orchestrator's public key injected during the handler phase.
+    // This is essential for identifying the correct row in the database.
+    let pubkey = task.orchestrator_pubkey.clone().unwrap_or_else(|| "unknown".to_string());
 
-    // Call wqc-core
+    tracing::info!("Worker: Starting task {} for orchestrator {}", task_id, pubkey);
+
+    // 1. Dispatch the quantum circuit execution to wqc-core.
     let result = core_client.dispatch_task(task).await;
 
-    // Decrement pending tasks count
+    // Decrement the in-memory counter regardless of the execution result.
     state.pending_tasks.fetch_sub(1, Ordering::SeqCst);
 
+    // 2. Prepare the result payload for the webhook.
     let payload = match result {
         Ok(res) => WebhookPayload {
-            task_id,
+            task_id: task_id.clone(),
             status: "success".to_string(),
             state_vector: Some(res.state_vector),
             proof: Some(res.proof),
             error: None,
         },
-        Err(e) => WebhookPayload {
-            task_id,
-            status: "error".to_string(),
-            state_vector: None,
-            proof: None,
-            error: Some(e.to_string()),
-        },
+        Err(e) => {
+            tracing::error!("Task {} failed: {}", task_id, e);
+            WebhookPayload {
+                task_id: task_id.clone(),
+                status: "error".to_string(),
+                state_vector: None,
+                proof: None,
+                error: Some(e.to_string()),
+            }
+        }
     };
 
+    // 3. Update the task status in the database to 'completed'.
+    // We use both the public key and task_id to ensure strict multi-tenant isolation.
+    if let Err(e) = state.storage.update_status(&pubkey, &task_id, "completed") {
+        tracing::error!("Storage update failed for task {} owned by {}: {}", task_id, pubkey, e);
+        // We continue anyway to attempt webhook delivery.
+    }
+
+    // 4. Send the result back to the orchestrator via webhook if requested.
     if let Some(url) = webhook_url {
-        if let Err(e) = send_webhook(state, http_client, &url, payload).await {
-            tracing::error!("Worker: Webhook delivery failed: {}", e);
+        // Note: send_webhook internal logic should handle signature signing
+        // using our node's private key.
+        if let Err(e) = crate::worker::send_webhook(state.clone(), http_client, &url, payload).await {
+            tracing::error!("Webhook delivery failed for task {}: {}", task_id, e);
         }
     }
+
+    tracing::info!("Worker: Finished task {}", task_id);
 }
 
 async fn send_webhook(

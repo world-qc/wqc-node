@@ -30,6 +30,8 @@ sha2 = "0.10"
 uuid = { version = "1", features = ["v4"] }
 # System resource monitoring
 sysinfo = "0.30"
+# SQLite
+rusqlite = { version = "0.39", features = ["bundled"] }
 # Future-proofing for potential P2P expansion
 # libp2p = "0.51" # Add when needed
 

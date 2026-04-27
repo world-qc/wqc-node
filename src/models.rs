@@ -9,6 +9,7 @@ pub struct Gate {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ComputeRequest {
     pub task_id: String,
+    pub orchestrator_pubkey: Option<String>,
     pub qubit_count: usize,
     pub circuit: Vec<Gate>,
     pub difficulty: u32,

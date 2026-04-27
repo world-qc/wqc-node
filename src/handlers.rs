@@ -31,79 +31,67 @@ pub async fn submit_task(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     body: Bytes,
-) -> (StatusCode, Json<serde_json::Value>) {
-    if let Err(reason) = verify_request_signature(&state, &headers, &body) {
-        return (
-            StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({
-                "error": reason
-            })),
-        );
-    }
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    // 1. Identify the orchestrator's public key.
+    // In dev_mode, we use a placeholder if the header is missing to simplify local testing.
+    let pubkey = if state.config.dev_mode {
+        headers.get("X-WQC-Orchestrator-PublicKey")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("dev-mode-placeholder")
+            .to_string()
+    } else {
+        // In production, strictly verify the Ed25519 signature before proceeding.
+        verify_request_signature(&state, &headers, &body)
+            .map_err(|e| (StatusCode::UNAUTHORIZED, e))?;
 
-    let payload: ComputeRequest = match serde_json::from_slice(&body) {
-        Ok(payload) => payload,
-        Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({
-                    "error": format!("Invalid JSON payload: {}", e)
-                })),
-            );
-        }
+        headers.get("X-WQC-Orchestrator-PublicKey")
+            .and_then(|v| v.to_str().ok())
+            .ok_or((StatusCode::BAD_REQUEST, "Missing X-WQC-Orchestrator-PublicKey header".to_string()))?
+            .to_string()
     };
 
-    tracing::info!("API: Validating task submission: {}", payload.task_id);
+    // 2. Parse and validate the compute request payload.
+    let mut payload: ComputeRequest = serde_json::from_slice(&body)
+        .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid JSON body".to_string()))?;
 
-    // 1. Node Capacity Validation (Static Config)
+    // Inject the identified public key into the payload.
+    // This ensures the worker knows who "owns" this task for later DB updates.
+    payload.orchestrator_pubkey = Some(pubkey.clone());
+
+    // Node Capacity Validation (Static Config)
     if payload.qubit_count > state.config.max_qubits {
-        tracing::warn!("Rejecting: qubit_count exceeds node limit");
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "qubit_count exceeds node limit" })),
-        );
+        return Err((StatusCode::BAD_REQUEST, "Requested qubit_count exceeds node limit".to_string()));
     }
-
     if payload.memory_cost_kb > state.config.max_memory_kb {
-        tracing::warn!("Rejecting: memory_cost_kb exceeds node limit");
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "memory_cost_kb exceeds node limit" })),
-        );
+        return Err((StatusCode::BAD_REQUEST, "Requested memory_cost_kb exceeds node limit".to_string()));
     }
+    // Circuit Logic Validation (Dynamic Sync Data)
+    validate_circuit_logic(&payload.circuit, payload.qubit_count, &state.supported_gates)
+        .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
 
-    // 2. Circuit Logic Validation (Dynamic Sync Data)
-    // Pass the gates synced from wqc-core and the request's qubit_count
-    if let Err(err_msg) = validate_circuit_logic(
-        &payload.circuit,
-        payload.qubit_count,
-        &state.supported_gates
-    ) {
-        tracing::warn!("Rejecting: Circuit validation failed: {}", err_msg);
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": err_msg })),
-        );
-    }
+    // 3. Persist the task to SQLite.
+    // The composite unique key (pubkey + task_id) prevents duplicate submissions
+    // from the same orchestrator while allowing ID overlap between different ones.
+    state.storage.save_task(&payload, &pubkey)
+        .map_err(|e| {
+            tracing::error!("Failed to persist task: {}", e);
+            (StatusCode::CONFLICT, "Task already exists for this orchestrator or storage error".to_string())
+        })?;
 
-    // 3. Queue the task
+    let response_task_id = payload.task_id.clone();
+
+    // 4. Dispatch the task to the background worker via MPSC channel.
     state.pending_tasks.fetch_add(1, Ordering::SeqCst);
     if let Err(e) = state.task_sender.send(payload).await {
-        tracing::error!("API: Failed to queue task: {}", e);
+        tracing::error!("Task queue full: {}", e);
         state.pending_tasks.fetch_sub(1, Ordering::SeqCst);
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": "Failed to queue task" })),
-        );
+        return Err((StatusCode::SERVICE_UNAVAILABLE, "Worker queue is full".to_string()));
     }
 
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({
-            "status": "accepted",
-            "message": "Task is valid and has been queued."
-        })),
-    )
+    Ok(Json(serde_json::json!({
+        "status": "accepted",
+        "task_id": response_task_id
+    })))
 }
 
 pub async fn sync_core_capabilities(core_url: &str) -> Vec<String> {

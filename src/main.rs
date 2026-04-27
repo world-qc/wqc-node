@@ -5,6 +5,7 @@ mod handlers;
 mod auth;
 mod worker;
 mod validation;
+mod storage;
 
 use models::ComputeRequest;
 
@@ -22,6 +23,7 @@ struct AppState {
     config: NodeConfig,
     seen_submit_nonces: Mutex<HashMap<String, i64>>,
     supported_gates: Vec<String>,
+    storage: storage::Storage,
 }
 
 #[tokio::main]
@@ -35,13 +37,24 @@ async fn main() -> anyhow::Result<()> {
     let core_client = Arc::new(WqcCoreClient::new(&config.core_url));
     let supported_gates = handlers::sync_core_capabilities(&config.core_url).await;
 
+    let storage = storage::Storage::new("wqc_node.db")?;
+    let pending_from_db = storage.get_pending_tasks()?;
+    let pending_count = pending_from_db.len();
+
     let (tx, rx) = mpsc::channel(100);
+
+    // Recovery: Re-enqueue pending tasks from DB
+    for task in pending_from_db {
+        tx.send(task).await?;
+    }
+
     let shared_state = Arc::new(AppState {
         task_sender: tx,
-        pending_tasks: AtomicUsize::new(0),
+        pending_tasks: AtomicUsize::new(pending_count),
         config: config.clone(),
         seen_submit_nonces: Mutex::new(HashMap::new()),
         supported_gates,
+        storage,
     });
 
     // Spawn background worker
