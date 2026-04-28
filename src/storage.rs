@@ -1,5 +1,5 @@
 use rusqlite::{params, Connection};
-use crate::models::ComputeRequest;
+use crate::models::ComputeTask;
 use std::sync::{Arc, Mutex};
 
 pub struct Storage {
@@ -32,7 +32,7 @@ impl Storage {
 
     /// Saves a new task to the database.
     /// This will fail if the same task_id from the same orchestrator already exists.
-    pub fn save_task(&self, task: &ComputeRequest, pubkey: &str) -> anyhow::Result<()> {
+    pub fn save_task(&self, task: &ComputeTask) -> anyhow::Result<()> {
         let conn = self.conn.lock().unwrap();
         let payload = serde_json::to_string(task)?;
         let now = std::time::SystemTime::now()
@@ -41,7 +41,7 @@ impl Storage {
         conn.execute(
             "INSERT INTO tasks (orchestrator_pubkey, task_id, payload, status, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![pubkey, task.task_id, payload, "pending", now],
+            params![task.orchestrator_pubkey, task.request.task_id, payload, "pending", now],
         )?;
         Ok(())
     }
@@ -69,14 +69,14 @@ impl Storage {
 
     /// Retrieves all tasks that are still in 'pending' state.
     /// Used during node startup for recovery.
-    pub fn get_pending_tasks(&self) -> anyhow::Result<Vec<ComputeRequest>> {
+    pub fn get_pending_tasks(&self) -> anyhow::Result<Vec<ComputeTask>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare("SELECT payload FROM tasks WHERE status = 'pending'")?;
         let task_iter = stmt.query_map([], |row| {
             let payload: String = row.get(0)?;
             // The stored payload JSON already contains the orchestrator_pubkey
             // thanks to the injection in handlers.rs.
-            Ok(serde_json::from_str::<ComputeRequest>(&payload).unwrap())
+            Ok(serde_json::from_str::<ComputeTask>(&payload).unwrap())
         })?;
 
         let mut tasks = Vec::new();

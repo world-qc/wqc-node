@@ -7,7 +7,7 @@ mod worker;
 mod validation;
 mod storage;
 
-use models::ComputeRequest;
+use models::ComputeTask;
 
 use axum::{routing::{get, post}, Router};
 use std::sync::{atomic::AtomicUsize, Arc, Mutex};
@@ -18,7 +18,7 @@ use crate::core_client::WqcCoreClient;
 
 // Global state shared across API handlers
 struct AppState {
-    task_sender: mpsc::Sender<ComputeRequest>,
+    task_sender: mpsc::Sender<ComputeTask>,
     pending_tasks: AtomicUsize, // Counter for tasks currently in the queue or being processed
     config: NodeConfig,
     seen_submit_nonces: Mutex<HashMap<String, i64>>,
@@ -39,6 +39,8 @@ async fn main() -> anyhow::Result<()> {
 
     let storage = storage::Storage::new("wqc_node.db")?;
     let pending_from_db = storage.get_pending_tasks()?;
+    tracing::info!("pending tasks: {:#?}", pending_from_db);
+
     let pending_count = pending_from_db.len();
 
     let (tx, rx) = mpsc::channel(100);

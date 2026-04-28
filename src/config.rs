@@ -7,7 +7,9 @@ use ed25519_dalek::SigningKey;
 pub struct NodeConfig {
     pub core_url: String,
     pub max_qubits: usize,
-    pub max_memory_kb: u32,
+    pub max_memory_cost_kb: u32,
+    pub min_difficulty: u32,
+    pub max_difficulty: u32,
     pub signing_key: SigningKey,
     pub node_public_key_b64: String,
     pub allowed_orchestrator_pubkeys: HashSet<String>,
@@ -18,7 +20,9 @@ impl NodeConfig {
     pub fn from_env() -> anyhow::Result<Self> {
         let core_url = env::var("WQC_CORE_URL").unwrap_or_else(|_| "http://localhost:3000".to_string());
         let max_qubits = env::var("WQC_MAX_QUBITS").unwrap_or_else(|_| "30".to_string()).parse().unwrap_or(30);
-        let max_memory_kb = env::var("WQC_MAX_MEMORY_KB").unwrap_or_else(|_| "2097152".to_string()).parse().unwrap_or(2097152);
+        let max_memory_cost_kb = env::var("WQC_MAX_MEMORY_COST_KB").unwrap_or_else(|_| "2097152".to_string()).parse().unwrap_or(2097152);
+        let min_difficulty = env::var("WQC_MIN_DIFFICULTY").unwrap_or_else(|_| "10".to_string()).parse().unwrap_or(10);
+        let max_difficulty = env::var("WQC_MAX_DIFFICULTY").unwrap_or_else(|_| "32".to_string()).parse().unwrap_or(32);
         let signing_key = load_signing_key_from_env()?;
         let node_public_key_b64 = STANDARD.encode(signing_key.verifying_key().to_bytes());
         let allowed_orchestrator_pubkeys = parse_pubkey_allowlist_env("WQC_ALLOWED_ORCHESTRATOR_PUBKEYS")?;
@@ -30,14 +34,16 @@ impl NodeConfig {
             ));
         }
 
-        tracing::info!("Node Config Loaded: Max Qubits = {}, Max Memory = {} KB", max_qubits, max_memory_kb);
+        tracing::info!("Node Config Loaded: Max Qubits = {}, Max Memory = {} KB", max_qubits, max_memory_cost_kb);
         tracing::info!("Node Public Key (base64): {}", node_public_key_b64);
         tracing::info!("Submit signature verification dev_mode={}", dev_mode);
 
         Ok(Self {
             core_url,
             max_qubits,
-            max_memory_kb,
+            max_memory_cost_kb,
+            min_difficulty,
+            max_difficulty,
             signing_key,
             node_public_key_b64,
             allowed_orchestrator_pubkeys,

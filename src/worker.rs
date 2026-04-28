@@ -3,7 +3,7 @@ use std::sync::atomic::Ordering;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 use crate::AppState;
-use crate::models::{ComputeRequest, WebhookPayload};
+use crate::models::{ComputeTask, WebhookPayload};
 use crate::core_client::WqcCoreClient;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use ed25519_dalek::Signer;
@@ -12,7 +12,7 @@ use sha2::Digest;
 pub async fn start_worker(
     state: Arc<AppState>,
     core_client: Arc<WqcCoreClient>,
-    mut rx: mpsc::Receiver<ComputeRequest>,
+    mut rx: mpsc::Receiver<ComputeTask>,
 ) {
     let http_client = reqwest::Client::new();
     tracing::info!("Worker: Started task processing loop");
@@ -26,19 +26,26 @@ async fn process_task(
     state: Arc<AppState>,
     core_client: Arc<WqcCoreClient>,
     http_client: &reqwest::Client,
-    task: ComputeRequest,
+    mut task: ComputeTask,
 ) {
-    let task_id = task.task_id.clone();
-    let webhook_url = task.webhook_url.clone();
+    let task_id = task.request.task_id.clone();
+    let webhook_url = task.request.webhook_url.take();
+    let difficulty = task.request.difficulty.unwrap();
 
     // Retrieve the orchestrator's public key injected during the handler phase.
     // This is essential for identifying the correct row in the database.
-    let pubkey = task.orchestrator_pubkey.clone().unwrap_or_else(|| "unknown".to_string());
+    let pubkey = task.orchestrator_pubkey.clone();
 
-    tracing::info!("Worker: Starting task {} for orchestrator {}", task_id, pubkey);
+    tracing::info!("Worker: Starting task {} for orchestrator {} (difficulty: {})", task_id, pubkey, difficulty);
+
+    // Start timer
+    let start_time = std::time::Instant::now();
 
     // 1. Dispatch the quantum circuit execution to wqc-core.
-    let result = core_client.dispatch_task(task).await;
+    let result = core_client.dispatch_task(task.request).await;
+
+    // Calculate wall-clock time
+    let execution_time_ms = start_time.elapsed().as_millis() as u64;
 
     // Decrement the in-memory counter regardless of the execution result.
     state.pending_tasks.fetch_sub(1, Ordering::SeqCst);
@@ -51,6 +58,8 @@ async fn process_task(
             state_vector: Some(res.state_vector),
             proof: Some(res.proof),
             error: None,
+            execution_time_ms,
+            difficulty,
         },
         Err(e) => {
             tracing::error!("Task {} failed: {}", task_id, e);
@@ -60,6 +69,8 @@ async fn process_task(
                 state_vector: None,
                 proof: None,
                 error: Some(e.to_string()),
+                execution_time_ms,
+                difficulty,
             }
         }
     };

@@ -22,3 +22,6 @@ target
 
 # OS X
 .DS_Store
+
+# SQLite.db
+*.db
