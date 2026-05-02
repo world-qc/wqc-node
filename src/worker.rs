@@ -1,13 +1,10 @@
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
 use crate::AppState;
+use crate::auth::generate_wqc_headers;
 use crate::models::{ComputeTask, WebhookPayload};
 use crate::core_client::WqcCoreClient;
-use base64::{engine::general_purpose::STANDARD, Engine as _};
-use ed25519_dalek::Signer;
-use sha2::Digest;
 
 pub async fn start_worker(
     state: Arc<AppState>,
@@ -31,6 +28,12 @@ async fn process_task(
     let task_id = task.request.task_id.clone();
     let webhook_url = task.request.webhook_url.take();
     let difficulty = task.request.difficulty.unwrap();
+
+    // Check for audit prefix
+    let is_audit = task_id.starts_with("audit-");
+    if is_audit {
+        tracing::info!("--- CRITICAL: Processing Registration Audit Task {} ---", task_id);
+    }
 
     // Retrieve the orchestrator's public key injected during the handler phase.
     // This is essential for identifying the correct row in the database.
@@ -101,31 +104,29 @@ async fn send_webhook(
     payload: WebhookPayload,
 ) -> anyhow::Result<()> {
     let body_json = serde_json::to_string(&payload)?;
+    let body_bytes = body_json.as_bytes();
 
-    // Signing logic for Webhook (Ed25519)
-    let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-    let nonce = uuid::Uuid::new_v4().to_string();
-
-    // Create structured message for signing
-    let mut hasher = sha2::Sha256::new();
-    hasher.update(body_json.as_bytes());
-    let body_hash = hex::encode(hasher.finalize());
-
-    let message = format!("WQC-WEBHOOK-V1\n{}\n{}\n{}", now, nonce, body_hash);
-    let signature = state.config.signing_key.sign(message.as_bytes());
-    let signature_b64 = STANDARD.encode(signature.to_bytes());
+    // Generate headers using the same logic as webhook results
+    let (sig, pubkey, nonce, ts) = generate_wqc_headers(
+        &state.config.signing_key,
+        body_bytes,
+        "WQC-WEBHOOK-V1"
+    );
 
     let res = client.post(url)
-        .header("X-WQC-Node-PublicKey", &state.config.node_public_key_b64)
-        .header("X-WQC-Timestamp", now.to_string())
+        .header("X-WQC-Node-PublicKey", pubkey)
+        .header("X-WQC-Timestamp", ts)
         .header("X-WQC-Nonce", nonce)
-        .header("X-WQC-Signature", signature_b64)
-        .json(&payload)
+        .header("X-WQC-Signature", sig)
+        .header("Content-Type", "application/json")
+        .body(body_json)
         .send()
         .await?;
 
     if !res.status().is_success() {
-        tracing::warn!("Worker: Webhook target returned error: {}", res.status());
+        let status = res.status();
+        let detail = res.text().await.unwrap_or_default();
+        tracing::warn!("Worker: Webhook target returned error {}: {}", status, detail);
     } else {
         tracing::info!("Webhook: Notified {} for task {}", url, payload.task_id);
     }

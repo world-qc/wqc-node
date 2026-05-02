@@ -35,22 +35,14 @@ pub async fn submit_task(
     body: Bytes,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     // 1. Identify the orchestrator's public key.
-    // In dev_mode, we use a placeholder if the header is missing to simplify local testing.
-    let pubkey = if state.config.dev_mode {
-        headers.get("X-WQC-Orchestrator-PublicKey")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("dev-mode-placeholder")
-            .to_string()
-    } else {
-        // In production, strictly verify the Ed25519 signature before proceeding.
-        verify_request_signature(&state, &headers, &body)
-            .map_err(|e| (StatusCode::UNAUTHORIZED, e))?;
+    // Verify the Ed25519 signature before proceeding.
+    verify_request_signature(&state, &headers, &body)
+        .map_err(|e| (StatusCode::UNAUTHORIZED, e))?;
 
-        headers.get("X-WQC-Orchestrator-PublicKey")
-            .and_then(|v| v.to_str().ok())
-            .ok_or((StatusCode::BAD_REQUEST, "Missing X-WQC-Orchestrator-PublicKey header".to_string()))?
-            .to_string()
-    };
+    let pubkey = headers.get("X-WQC-Orchestrator-PublicKey")
+        .and_then(|v| v.to_str().ok())
+        .ok_or((StatusCode::BAD_REQUEST, "Missing X-WQC-Orchestrator-PublicKey header".to_string()))?
+        .to_string();
 
     // 2. Parse and validate the compute request payload.
     let mut payload: ComputeRequest = serde_json::from_slice(&body)

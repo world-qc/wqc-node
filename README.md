@@ -47,12 +47,11 @@ The `wqc-node` is evolving alongside the `wqc-core` engine. We are currently in 
 | Variable | Description | Default Value |
 | :--- | :--- | :--- |
 | `WQC_NODE_PRIVATE_KEY` | Ed25519 private key (Base64) for node identity and signing webhooks. | (Required) |
-| `WQC_ALLOWED_ORCHESTRATOR_PUBKEYS` | Comma-separated list of trusted Orchestrator public keys. | (Empty: Reject all) |
+| `WQC_ORCHESTRATOR_URLS` | Comma-separated list of the Orchestrator urls. | (Required) |
 | `WQC_MIN_DIFFICULTY` | Minimum acceptable PoUW difficulty (number of leading zero bits). | `10` |
 | `WQC_MAX_DIFFICULTY` | Maximum acceptable PoUW difficulty (number of leading zero bits). | `24` |
 | `WQC_MAX_QUBITS` | Maximum number of qubits allowed for a single task. | `30` |
 | `WQC_MAX_MEMORY_COST_KB` | Maximum allowed memory hardness parameter for Argon2id. | `2097152` (2GB) |
-| `WQC_DEV_MODE` | Enable development mode to skip signature verification (`true`/`false`). | `false` |
 | `WQC_DATABASE_URL` | File path for the SQLite persistence database. | `sqlite:wqc-node.db` |
 
 ---

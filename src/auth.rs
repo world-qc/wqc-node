@@ -1,16 +1,12 @@
 use crate::AppState;
 use axum::body::Bytes;
 use axum::http::HeaderMap;
-use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use sha2::{Digest, Sha256};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub fn verify_request_signature(state: &AppState, headers: &HeaderMap, body: &Bytes) -> Result<(), String> {
-    if state.config.dev_mode {
-        return Ok(());
-    }
-
     // 1. Extract headers
     let pubkey_b64 = read_header(headers, "X-WQC-Orchestrator-PublicKey")?;
     let signature_b64 = read_header(headers, "X-WQC-Signature")?;
@@ -26,7 +22,7 @@ pub fn verify_request_signature(state: &AppState, headers: &HeaderMap, body: &By
         return Err("Timestamp out of window".to_string());
     }
 
-    if !state.config.allowed_orchestrator_pubkeys.contains(pubkey_b64) {
+    if !state.allowed_orchestrators.read().unwrap().contains(pubkey_b64) {
         return Err("Unauthorized Public Key".to_string());
     }
 
@@ -68,4 +64,28 @@ pub fn verify_request_signature(state: &AppState, headers: &HeaderMap, body: &By
 
 fn read_header<'a>(headers: &'a HeaderMap, name: &str) -> Result<&'a str, String> {
     headers.get(name).and_then(|v| v.to_str().ok()).ok_or_else(|| format!("Missing header: {}", name))
+}
+
+pub fn generate_wqc_headers(
+    signing_key: &SigningKey,
+    body: &[u8],
+    version: &str,
+) -> (String, String, String, String) {
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        .to_string();
+
+    let nonce = uuid::Uuid::new_v4().to_string();
+    let pubkey_b64 = STANDARD.encode(signing_key.verifying_key().to_bytes());
+
+    // Message format: version + "\n" + timestamp + "\n" + nonce + "\n" + hex(sha256(body))
+    let body_hash = hex::encode(Sha256::digest(body));
+    let message = format!("{}\n{}\n{}\n{}", version, timestamp, nonce, body_hash);
+
+    let signature = signing_key.sign(message.as_bytes());
+    let signature_b64 = STANDARD.encode(signature.to_bytes());
+
+    (signature_b64, pubkey_b64, nonce, timestamp)
 }
