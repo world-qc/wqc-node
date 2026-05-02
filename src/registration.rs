@@ -10,7 +10,7 @@ pub async fn register_node(state: Arc<AppState>, orchestrator_url: &str) -> anyh
 
     // The node's own address (This should be configurable or auto-detected)
     let body = json!({
-        "address": format!("http://{}:{}", state.config.node_host, state.config.node_port)
+        "address": state.config.node_url,
     });
     let body_bytes = serde_json::to_vec(&body)?;
 

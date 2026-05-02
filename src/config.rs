@@ -4,8 +4,7 @@ use ed25519_dalek::SigningKey;
 
 #[derive(Clone)]
 pub struct NodeConfig {
-    pub node_host: String,
-    pub node_port: usize,
+    pub node_url: String,
     pub core_url: String,
     pub max_qubits: usize,
     pub max_memory_cost_kb: u32,
@@ -19,8 +18,7 @@ pub struct NodeConfig {
 
 impl NodeConfig {
     pub fn from_env() -> anyhow::Result<Self> {
-        let node_host = env::var("WQC_NODE_HOST").unwrap_or_else(|_| "wqc-node".to_string());
-        let node_port = env::var("WQC_NODE_POrt").unwrap_or_else(|_| "8080".to_string()).parse().unwrap_or(8080);
+        let node_url = env::var("WQC_NODE_ADVERTISED_URL").unwrap_or_else(|_| "http://wqc-node:8080".to_string());
         let core_url = env::var("WQC_CORE_URL").unwrap_or_else(|_| "http://localhost:3000".to_string());
         let max_qubits = env::var("WQC_MAX_QUBITS").unwrap_or_else(|_| "30".to_string()).parse().unwrap_or(30);
         let max_memory_cost_kb = env::var("WQC_MAX_MEMORY_COST_KB").unwrap_or_else(|_| "2097152".to_string()).parse().unwrap_or(2097152);
@@ -47,8 +45,7 @@ impl NodeConfig {
         tracing::info!("Node Public Key (base64): {}", node_public_key_b64);
 
         Ok(Self {
-            node_host,
-            node_port,
+            node_url,
             core_url,
             max_qubits,
             max_memory_cost_kb,
