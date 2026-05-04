@@ -51,7 +51,6 @@ pub struct WebhookPayload {
 
 #[derive(Debug, Serialize)]
 pub struct NodeStatus {
-    pub node_public_key: String,
     pub pending_tasks: usize,
     pub max_qubits: usize,
     pub max_memory_cost_kb: u32,

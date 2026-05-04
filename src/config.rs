@@ -11,7 +11,6 @@ pub struct NodeConfig {
     pub min_difficulty: u32,
     pub max_difficulty: u32,
     pub signing_key: SigningKey,
-    pub node_public_key_b64: String,
     pub orchestrator_urls: Vec<String>,
     pub database_url: String,
 }
@@ -25,7 +24,6 @@ impl NodeConfig {
         let min_difficulty = env::var("WQC_MIN_DIFFICULTY").unwrap_or_else(|_| "10".to_string()).parse().unwrap_or(10);
         let max_difficulty = env::var("WQC_MAX_DIFFICULTY").unwrap_or_else(|_| "32".to_string()).parse().unwrap_or(32);
         let signing_key = load_signing_key_from_env()?;
-        let node_public_key_b64 = STANDARD.encode(signing_key.verifying_key().to_bytes());
         let orchestrator_urls: Vec<_> = env::var("WQC_ORCHESTRATOR_URLS")
             .unwrap_or_default()
             .split(',')
@@ -41,6 +39,7 @@ impl NodeConfig {
 
         let database_url = env::var("WQC_DATABASE_URL").unwrap_or_else(|_| "salite:wqc-node.db".to_string());
 
+        let node_public_key_b64 = STANDARD.encode(signing_key.verifying_key().to_bytes());
         tracing::info!("Node Config Loaded: Max Qubits = {}, Max Memory = {} KB", max_qubits, max_memory_cost_kb);
         tracing::info!("Node Public Key (base64): {}", node_public_key_b64);
 
@@ -52,7 +51,6 @@ impl NodeConfig {
             min_difficulty,
             max_difficulty,
             signing_key,
-            node_public_key_b64,
             orchestrator_urls,
             database_url,
         })

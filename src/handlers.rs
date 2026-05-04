@@ -6,29 +6,6 @@ use crate::auth::verify_request_signature;
 use crate::validation::validate_circuit_logic;
 use sysinfo::{CpuRefreshKind, MemoryRefreshKind, System};
 
-pub async fn get_status(State(state): State<Arc<AppState>>) -> Json<NodeStatus> {
-    let mut sys = System::new_all();
-    // Refresh only what we need for performance
-    sys.refresh_specifics(
-        sysinfo::RefreshKind::new()
-            .with_cpu(CpuRefreshKind::everything())
-            .with_memory(MemoryRefreshKind::everything()),
-    );
-
-    Json(NodeStatus {
-        node_public_key: state.config.node_public_key_b64.clone(),
-        pending_tasks: state.pending_tasks.load(Ordering::SeqCst),
-        max_qubits: state.config.max_qubits,
-        max_memory_cost_kb: state.config.max_memory_cost_kb,
-        min_difficulty: state.config.min_difficulty,
-        max_difficulty: state.config.max_difficulty,
-        system_memory_used_kb: sys.used_memory() / 1024,
-        system_memory_total_kb: sys.total_memory() / 1024,
-        cpu_usage_percent: sys.global_cpu_info().cpu_usage(),
-        supported_gates: state.supported_gates.clone(),
-    })
-}
-
 pub async fn submit_task(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -130,4 +107,30 @@ pub async fn sync_core_capabilities(core_url: &str) -> Vec<String> {
 // Default gate list as a fallback
 fn default_gates() -> Vec<String> {
     vec!["H".into(), "X".into(), "Y".into(), "Z".into(), "CNOT".into()]
+}
+
+pub fn collect_node_status(state: &AppState) -> NodeStatus {
+    let mut sys = System::new_all();
+    // Refresh only what we need for performance
+    sys.refresh_specifics(
+        sysinfo::RefreshKind::new()
+            .with_cpu(CpuRefreshKind::everything())
+            .with_memory(MemoryRefreshKind::everything()),
+    );
+
+    NodeStatus {
+        pending_tasks: state.pending_tasks.load(Ordering::SeqCst),
+        max_qubits: state.config.max_qubits,
+        max_memory_cost_kb: state.config.max_memory_cost_kb,
+        min_difficulty: state.config.min_difficulty,
+        max_difficulty: state.config.max_difficulty,
+        system_memory_used_kb: sys.used_memory() / 1024,
+        system_memory_total_kb: sys.total_memory() / 1024,
+        cpu_usage_percent: sys.global_cpu_info().cpu_usage(),
+        supported_gates: state.supported_gates.clone(),
+    }
+}
+
+pub async fn get_status(State(state): State<Arc<AppState>>) -> Json<NodeStatus> {
+    Json(collect_node_status(&state))
 }

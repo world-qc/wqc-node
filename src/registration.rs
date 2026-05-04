@@ -1,8 +1,10 @@
 use std::sync::Arc;
-use crate::AppState;
-use crate::auth::generate_wqc_headers;
+use std::time::Duration;
 use reqwest::Client;
 use serde_json::json;
+use crate::AppState;
+use crate::auth::generate_wqc_headers;
+use crate::handlers::collect_node_status;
 
 pub async fn register_node(state: Arc<AppState>, orchestrator_url: &str) -> anyhow::Result<()> {
     let client = Client::new();
@@ -44,5 +46,56 @@ pub async fn register_node(state: Arc<AppState>, orchestrator_url: &str) -> anyh
     } else {
         let err_msg = response.text().await?;
         Err(anyhow::anyhow!("Registration failed: {}", err_msg))
+    }
+}
+
+pub async fn start_heartbeat_loop(state: Arc<AppState>, orchestrator_url: String) {
+    let client = Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .unwrap_or_default();
+
+    let heartbeat_endpoint = format!("{}/api/v1/heartbeat", orchestrator_url);
+    let mut interval = tokio::time::interval(Duration::from_secs(60));
+
+    tracing::info!("Starting heartbeat loop for {}", heartbeat_endpoint);
+
+    loop {
+        interval.tick().await;
+
+        let status = collect_node_status(&state);
+        let body_bytes = match serde_json::to_vec(&status) {
+            Ok(b) => b,
+            Err(e) => {
+                tracing::error!("Failed to serialize node status: {}", e);
+                continue;
+            }
+        };
+
+        let (sig, pubkey, nonce, ts) = generate_wqc_headers(
+            &state.config.signing_key,
+            &body_bytes,
+            "WQC-HEARTBEAT-V1"
+        );
+
+        match client.post(&heartbeat_endpoint)
+            .header("X-WQC-Signature", sig)
+            .header("X-WQC-Node-PublicKey", pubkey)
+            .header("X-WQC-Nonce", nonce)
+            .header("X-WQC-Timestamp", ts)
+            .json(&status)
+            .send()
+            .await
+        {
+            Ok(res) if res.status().is_success() => {
+                tracing::info!("Heartbeat sent to {}", orchestrator_url);
+            }
+            Ok(res) => {
+                tracing::warn!("Heartbeat rejected by {}: Status {}", orchestrator_url, res.status());
+            }
+            Err(e) => {
+                tracing::error!("Failed to send heartbeat to {}: {}", orchestrator_url, e);
+            }
+        }
     }
 }

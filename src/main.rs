@@ -86,10 +86,11 @@ async fn main() -> anyhow::Result<()> {
                 let state = state_for_reg.clone();
                 let url = orch_url.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = registration::register_node(state, &url).await {
+                    if let Err(e) = registration::register_node(state.clone(), &url).await {
                         tracing::error!("Registration failed for {}: {}", url, e);
                     } else {
                         tracing::info!("Successfully sent registration request to {}", url);
+                        registration::start_heartbeat_loop(state, url).await;
                     }
                 });
             }
