@@ -16,6 +16,7 @@ pub struct ComputeRequest {
     pub circuit: Vec<Gate>,
     pub memory_cost_kb: u32,
     pub required_votes: u32,
+    pub upload_url: Option<String>,
     pub webhook_url: Option<String>,
     pub difficulty: Option<u32>, // Difficulty calculated by the node
 }
@@ -48,10 +49,10 @@ pub struct WebhookPayload {
     pub parent_task_id: Option<String>,
     pub global_offset: String,
     pub status: String,
-    pub state_vector: Option<Vec<[f64; 2]>>,
+    pub content_hash: Option<String>,
     pub proof: Option<Proof>,
     pub error: Option<String>,
-    pub execution_time_ms: u64,
+    pub execution_time_ms: Option<u64>,
     pub difficulty: u32,
 }
 

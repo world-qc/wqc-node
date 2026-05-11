@@ -1,10 +1,17 @@
+use sha2::{Sha256, Digest};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use tokio::sync::mpsc;
 use crate::AppState;
 use crate::auth::generate_wqc_headers;
-use crate::models::{ComputeTask, WebhookPayload};
+use crate::models::{ComputeTask, ComputeRequest, WebhookPayload};
 use crate::core_client::WqcCoreClient;
+
+struct TaskResultData {
+    content_hash: String,
+    proof: crate::models::Proof,
+    execution_time_ms: u64,
+}
 
 pub async fn start_worker(
     state: Arc<AppState>,
@@ -37,29 +44,20 @@ async fn process_task(
 
     tracing::info!("Worker: Starting task {}", task_id);
 
-    // Start timer
-    let start_time = std::time::Instant::now();
-
-    // 1. Dispatch the quantum circuit execution to wqc-core.
-    let result = core_client.dispatch_task(task.request).await;
-
-    // Calculate wall-clock time
-    let execution_time_ms = start_time.elapsed().as_millis() as u64;
-
-    // Decrement the in-memory counter regardless of the execution result.
-    state.pending_tasks.fetch_sub(1, Ordering::SeqCst);
+    // Call the abstracted logic
+    let result = execute_compute_and_upload(&core_client, http_client, &task.request).await;
 
     // 2. Prepare the result payload for the webhook.
     let payload = match result {
-        Ok(res) => WebhookPayload {
+        Ok(data) => WebhookPayload {
             task_id: task_id.clone(),
             parent_task_id,
             global_offset,
             status: "success".to_string(),
-            state_vector: Some(res.state_vector),
-            proof: Some(res.proof),
+            content_hash: Some(data.content_hash),
+            proof: Some(data.proof),
             error: None,
-            execution_time_ms,
+            execution_time_ms: Some(data.execution_time_ms),
             difficulty,
         },
         Err(e) => {
@@ -69,18 +67,19 @@ async fn process_task(
                 parent_task_id,
                 global_offset,
                 status: "error".to_string(),
-                state_vector: None,
+                content_hash: None,
                 proof: None,
                 error: Some(e.to_string()),
-                execution_time_ms,
+                execution_time_ms: None,
                 difficulty,
             }
         }
     };
 
-    // 3. Update the task status in the database to 'completed'.
+    // 3. Update the task status in the database to 'completed' or 'failed'.
     // We use both the public key and task_id to ensure strict multi-tenant isolation.
-    if let Err(e) = state.storage.update_status(&pubkey, &task_id, "completed") {
+    let status = if payload.status == "error" { "failed" } else { "completed" };
+    if let Err(e) = state.storage.update_status(&pubkey, &task_id, status) {
         tracing::error!("Storage update failed for task {} owned by {}: {}", task_id, pubkey, e);
         // We continue anyway to attempt webhook delivery.
     }
@@ -94,7 +93,59 @@ async fn process_task(
         }
     }
 
+    // Decrement the in-memory counter regardless of the execution result.
+    state.pending_tasks.fetch_sub(1, Ordering::SeqCst);
+
     tracing::info!("Worker: Finished task {}", task_id);
+}
+
+// Core logic that handles computation and S3 upload
+// Returns Success data or an Error
+async fn execute_compute_and_upload(
+    core_client: &WqcCoreClient,
+    http_client: &reqwest::Client,
+    request: &ComputeRequest,
+) -> anyhow::Result<TaskResultData> {
+    // Start timer
+    let start_time = std::time::Instant::now();
+
+    // 1. Dispatch computation (?) handles early return on error
+    let res = core_client.dispatch_task(request.clone()).await?;
+
+    // Calculate wall-clock time
+    let execution_time_ms = start_time.elapsed().as_millis() as u64;
+
+    // 2. Binary conversion and hashing
+    let mut hasher = Sha256::new();
+    let mut binary_data = Vec::with_capacity(res.state_vector.len() * 16);
+    for [real, imag] in &res.state_vector {
+        let r_bytes = real.to_le_bytes();
+        let i_bytes = imag.to_le_bytes();
+        binary_data.extend_from_slice(&r_bytes);
+        binary_data.extend_from_slice(&i_bytes);
+        hasher.update(&r_bytes);
+        hasher.update(&i_bytes);
+    }
+    let content_hash = hex::encode(hasher.finalize());
+
+    // 3. Upload to S3 if URL is provided
+    if let Some(url) = &request.upload_url {
+        let resp = http_client.put(url)
+            .header("Content-Type", "application/octet-stream")
+            .body(binary_data)
+            .send()
+            .await?; // HTTP request error
+
+        if !resp.status().is_success() {
+            anyhow::bail!("S3 upload failed with status: {}", resp.status());
+        }
+    }
+
+    Ok(TaskResultData {
+        content_hash,
+        proof: res.proof,
+        execution_time_ms,
+    })
 }
 
 async fn send_webhook(
