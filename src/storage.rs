@@ -7,8 +7,9 @@ pub struct Storage {
 }
 
 impl Storage {
-    pub fn new(db_path: &str) -> anyhow::Result<Self> {
-        let conn = Connection::open(db_path)?;
+    pub fn new(url: &str) -> anyhow::Result<Self> {
+        let path = url.strip_prefix("sqlite:").unwrap_or(url);
+        let conn = Connection::open(path)?;
 
         // Use a composite unique key (orchestrator_pubkey + task_id)
         // to allow different orchestrators to use the same task_id.
