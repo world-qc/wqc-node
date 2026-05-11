@@ -26,20 +26,16 @@ async fn process_task(
     mut task: ComputeTask,
 ) {
     let task_id = task.request.task_id.clone();
+    let parent_task_id = task.request.parent_task_id.clone();
+    let global_offset = task.request.global_offset.clone();
     let webhook_url = task.request.webhook_url.take();
     let difficulty = task.request.difficulty.unwrap();
-
-    // Check for audit prefix
-    let is_audit = task_id.starts_with("audit-");
-    if is_audit {
-        tracing::info!("--- CRITICAL: Processing Registration Audit Task {} ---", task_id);
-    }
 
     // Retrieve the orchestrator's public key injected during the handler phase.
     // This is essential for identifying the correct row in the database.
     let pubkey = task.orchestrator_pubkey.clone();
 
-    tracing::info!("Worker: Starting task {} for orchestrator {} (difficulty: {})", task_id, pubkey, difficulty);
+    tracing::info!("Worker: Starting task {}", task_id);
 
     // Start timer
     let start_time = std::time::Instant::now();
@@ -57,6 +53,8 @@ async fn process_task(
     let payload = match result {
         Ok(res) => WebhookPayload {
             task_id: task_id.clone(),
+            parent_task_id,
+            global_offset,
             status: "success".to_string(),
             state_vector: Some(res.state_vector),
             proof: Some(res.proof),
@@ -68,6 +66,8 @@ async fn process_task(
             tracing::error!("Task {} failed: {}", task_id, e);
             WebhookPayload {
                 task_id: task_id.clone(),
+                parent_task_id,
+                global_offset,
                 status: "error".to_string(),
                 state_vector: None,
                 proof: None,

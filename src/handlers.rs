@@ -1,10 +1,12 @@
 use axum::{body::Bytes, extract::State, http::{HeaderMap, StatusCode}, Json};
 use std::sync::{Arc, atomic::Ordering};
+use sysinfo::{CpuRefreshKind, MemoryRefreshKind, System};
+use num_bigint::BigUint;
+use std::str::FromStr;
 use crate::models::{ComputeRequest, ComputeTask, NodeStatus};
 use crate::AppState;
 use crate::auth::verify_request_signature;
 use crate::validation::validate_circuit_logic;
-use sysinfo::{CpuRefreshKind, MemoryRefreshKind, System};
 
 pub async fn submit_task(
     State(state): State<Arc<AppState>>,
@@ -25,6 +27,11 @@ pub async fn submit_task(
     let mut payload: ComputeRequest = serde_json::from_slice(&body)
         .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid JSON body".to_string()))?;
 
+    // Parse BigInt global_offset
+    if BigUint::from_str(&payload.global_offset).is_err() {
+        return Err((StatusCode::BAD_REQUEST, "Invalid global_offset format".to_string()));
+    }
+
     // Node Capacity Validation (Static Config)
     if payload.qubit_count > state.config.max_qubits {
         return Err((StatusCode::BAD_REQUEST, "Requested qubit_count exceeds node limit".to_string()));
@@ -40,7 +47,7 @@ pub async fn submit_task(
     if difficulty > state.config.max_difficulty {
         return Err((StatusCode::BAD_REQUEST, "Difficulty too high: Exceeds node's computational capacity".to_string()));
     }
-    tracing::info!("Accepted task {} with difficulty {}", payload.task_id, difficulty);
+    tracing::info!("Accepted task {} for parent {:?}", payload.task_id, payload.parent_task_id);
     payload.difficulty = Some(difficulty);
 
     // Circuit Logic Validation (Dynamic Sync Data)

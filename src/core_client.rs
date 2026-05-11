@@ -13,6 +13,7 @@ impl WqcCoreClient {
         Self {
             client: Client::builder()
                 // Large-scale simulations might take time, setting a generous timeout
+                // FIXME:
                 .timeout(Duration::from_secs(300))
                 .build()
                 .expect("Failed to build HTTP client"),

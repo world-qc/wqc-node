@@ -9,9 +9,13 @@ pub struct Gate {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ComputeRequest {
     pub task_id: String,
+    pub parent_task_id: Option<String>,
+    pub global_offset: String,
     pub qubit_count: usize,
+    pub original_qubit_count: Option<usize>,
     pub circuit: Vec<Gate>,
     pub memory_cost_kb: u32,
+    pub required_votes: u32,
     pub webhook_url: Option<String>,
     pub difficulty: Option<u32>, // Difficulty calculated by the node
 }
@@ -41,6 +45,8 @@ pub struct ComputeResponse {
 #[derive(Debug, Serialize)]
 pub struct WebhookPayload {
     pub task_id: String,
+    pub parent_task_id: Option<String>,
+    pub global_offset: String,
     pub status: String,
     pub state_vector: Option<Vec<[f64; 2]>>,
     pub proof: Option<Proof>,
