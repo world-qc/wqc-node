@@ -3,7 +3,7 @@ use std::sync::{Arc, atomic::Ordering};
 use sysinfo::{CpuRefreshKind, MemoryRefreshKind, System};
 use num_bigint::BigUint;
 use std::str::FromStr;
-use crate::models::{ComputeRequest, ComputeTask, NodeStatus};
+use crate::models::{ComputeRequest, ComputeTask, Gate, NodeStatus};
 use crate::AppState;
 use crate::auth::verify_request_signature;
 use crate::validation::validate_circuit_logic;
@@ -40,6 +40,13 @@ pub async fn submit_task(
         return Err((StatusCode::BAD_REQUEST, "Requested memory_cost_kb exceeds node limit".to_string()));
     }
 
+    // Circuit Logic Validation (Dynamic Sync Data)
+    validate_circuit_logic(&payload.circuit, payload.qubit_count, &state.supported_gates)
+        .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+
+    // Normalize the structure (unwrap single-element arrays)
+    normalize_gate_params(&mut payload.circuit);
+
     let difficulty = crate::validation::calculate_difficulty(&payload.circuit, payload.qubit_count);
     if difficulty < state.config.min_difficulty {
         return Err((StatusCode::BAD_REQUEST, "Difficulty too low: Task not economically viable".to_string()));
@@ -49,10 +56,6 @@ pub async fn submit_task(
     }
     tracing::info!("Accepted task {} for parent {:?}", payload.task_id, payload.parent_task_id);
     payload.difficulty = Some(difficulty);
-
-    // Circuit Logic Validation (Dynamic Sync Data)
-    validate_circuit_logic(&payload.circuit, payload.qubit_count, &state.supported_gates)
-        .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
 
     // Wrap into internal ComputeTask
     let task = ComputeTask {
@@ -140,4 +143,18 @@ pub fn collect_node_status(state: &AppState) -> NodeStatus {
 
 pub async fn get_status(State(state): State<Arc<AppState>>) -> Json<NodeStatus> {
     Json(collect_node_status(&state))
+}
+
+/// If params is an array with a single element, converts it into the numerical value contained within.
+pub fn normalize_gate_params(circuit: &mut [Gate]) {
+    for gate in circuit.iter_mut() {
+        // If gate.params is of type Value::Array and its length is 1
+        if let Some(arr) = gate.params.as_array() {
+            if arr.len() == 1 {
+                // Extract the first element of the array and overwrite gate.params itself
+                // In this case, clone and assign arr[0]
+                gate.params = arr[0].clone();
+            }
+        }
+    }
 }
