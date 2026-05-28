@@ -36,9 +36,6 @@ pub async fn submit_task(
     if payload.qubit_count > state.config.max_qubits {
         return Err((StatusCode::BAD_REQUEST, "Requested qubit_count exceeds node limit".to_string()));
     }
-    if payload.memory_cost_kb > state.config.max_memory_cost_kb {
-        return Err((StatusCode::BAD_REQUEST, "Requested memory_cost_kb exceeds node limit".to_string()));
-    }
 
     // Circuit Logic Validation (Dynamic Sync Data)
     validate_circuit_logic(&payload.circuit, payload.qubit_count, &state.supported_gates)
@@ -47,15 +44,10 @@ pub async fn submit_task(
     // Normalize the structure (unwrap single-element arrays)
     normalize_gate_params(&mut payload.circuit);
 
-    let difficulty = crate::validation::calculate_difficulty(&payload.circuit, payload.qubit_count);
-    if difficulty < state.config.min_difficulty {
-        return Err((StatusCode::BAD_REQUEST, "Difficulty too low: Task not economically viable".to_string()));
-    }
-    if difficulty > state.config.max_difficulty {
-        return Err((StatusCode::BAD_REQUEST, "Difficulty too high: Exceeds node's computational capacity".to_string()));
-    }
+    // Set NodeID
+    payload.node_id = Some(state.config.node_id.clone());
+
     tracing::info!("Accepted task {} for parent {:?}", payload.task_id, payload.parent_task_id);
-    payload.difficulty = Some(difficulty);
 
     // Wrap into internal ComputeTask
     let task = ComputeTask {
@@ -131,9 +123,6 @@ pub fn collect_node_status(state: &AppState) -> NodeStatus {
     NodeStatus {
         pending_tasks: state.pending_tasks.load(Ordering::SeqCst),
         max_qubits: state.config.max_qubits,
-        max_memory_cost_kb: state.config.max_memory_cost_kb,
-        min_difficulty: state.config.min_difficulty,
-        max_difficulty: state.config.max_difficulty,
         system_memory_used_kb: sys.used_memory() / 1024,
         system_memory_total_kb: sys.total_memory() / 1024,
         cpu_usage_percent: sys.global_cpu_info().cpu_usage(),

@@ -4,12 +4,10 @@ use ed25519_dalek::SigningKey;
 
 #[derive(Clone)]
 pub struct NodeConfig {
+    pub node_id: String,
     pub node_url: String,
     pub core_url: String,
     pub max_qubits: usize,
-    pub max_memory_cost_kb: u32,
-    pub min_difficulty: u32,
-    pub max_difficulty: u32,
     pub signing_key: SigningKey,
     pub orchestrator_urls: Vec<String>,
     pub database_url: String,
@@ -20,9 +18,6 @@ impl NodeConfig {
         let node_url = env::var("WQC_NODE_ADVERTISED_URL").unwrap_or_else(|_| "http://wqc-node:8080".to_string());
         let core_url = env::var("WQC_CORE_URL").unwrap_or_else(|_| "http://localhost:3000".to_string());
         let max_qubits = env::var("WQC_MAX_QUBITS").unwrap_or_else(|_| "30".to_string()).parse().unwrap_or(30);
-        let max_memory_cost_kb = env::var("WQC_MAX_MEMORY_COST_KB").unwrap_or_else(|_| "2097152".to_string()).parse().unwrap_or(2097152);
-        let min_difficulty = env::var("WQC_MIN_DIFFICULTY").unwrap_or_else(|_| "10".to_string()).parse().unwrap_or(10);
-        let max_difficulty = env::var("WQC_MAX_DIFFICULTY").unwrap_or_else(|_| "32".to_string()).parse().unwrap_or(32);
         let signing_key = load_signing_key_from_env()?;
         let orchestrator_urls: Vec<_> = env::var("WQC_ORCHESTRATOR_URLS")
             .unwrap_or_default()
@@ -40,16 +35,14 @@ impl NodeConfig {
         let database_url = env::var("WQC_DATABASE_URL").unwrap_or_else(|_| "salite:wqc-node.db".to_string());
 
         let node_public_key_b64 = STANDARD.encode(signing_key.verifying_key().to_bytes());
-        tracing::info!("Node Config Loaded: Max Qubits = {}, Max Memory = {} KB", max_qubits, max_memory_cost_kb);
+        tracing::info!("Node Config Loaded: Max Qubits = {}", max_qubits);
         tracing::info!("Node Public Key (base64): {}", node_public_key_b64);
 
         Ok(Self {
+            node_id: node_public_key_b64,
             node_url,
             core_url,
             max_qubits,
-            max_memory_cost_kb,
-            min_difficulty,
-            max_difficulty,
             signing_key,
             orchestrator_urls,
             database_url,

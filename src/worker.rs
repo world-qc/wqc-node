@@ -1,4 +1,3 @@
-use sha2::{Sha256, Digest};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use tokio::sync::mpsc;
@@ -36,7 +35,6 @@ async fn process_task(
     let parent_task_id = task.request.parent_task_id.clone();
     let global_offset = task.request.global_offset.clone();
     let webhook_url = task.request.webhook_url.take();
-    let difficulty = task.request.difficulty.unwrap();
 
     // Retrieve the orchestrator's public key injected during the handler phase.
     // This is essential for identifying the correct row in the database.
@@ -58,7 +56,6 @@ async fn process_task(
             proof: Some(data.proof),
             error: None,
             execution_time_ms: Some(data.execution_time_ms),
-            difficulty,
         },
         Err(e) => {
             tracing::error!("Task {} failed: {}", task_id, e);
@@ -71,7 +68,6 @@ async fn process_task(
                 proof: None,
                 error: Some(e.to_string()),
                 execution_time_ms: None,
-                difficulty,
             }
         }
     };
@@ -115,18 +111,14 @@ async fn execute_compute_and_upload(
     // Calculate wall-clock time
     let execution_time_ms = start_time.elapsed().as_millis() as u64;
 
-    // 2. Binary conversion and hashing
-    let mut hasher = Sha256::new();
+    // 2. Binary conversion
     let mut binary_data = Vec::with_capacity(res.state_vector.len() * 16);
     for [real, imag] in &res.state_vector {
         let r_bytes = real.to_le_bytes();
         let i_bytes = imag.to_le_bytes();
         binary_data.extend_from_slice(&r_bytes);
         binary_data.extend_from_slice(&i_bytes);
-        hasher.update(&r_bytes);
-        hasher.update(&i_bytes);
     }
-    let content_hash = hex::encode(hasher.finalize());
 
     // 3. Upload to S3 if URL is provided
     if let Some(url) = &request.upload_url {
@@ -142,7 +134,7 @@ async fn execute_compute_and_upload(
     }
 
     Ok(TaskResultData {
-        content_hash,
+        content_hash: res.proof.public_inputs.output_result_hash.clone(),
         proof: res.proof,
         execution_time_ms,
     })

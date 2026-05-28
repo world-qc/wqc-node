@@ -22,23 +22,3 @@ pub fn validate_circuit_logic(
     }
     Ok(())
 }
-
-/// Calculates the target number of leading zero bits (Difficulty).
-/// This MUST return a small integer (e.g., 5 to 32), not a huge score.
-pub fn calculate_difficulty(circuit: &[crate::models::Gate], qubit_count: usize) -> u32 {
-    // Base difficulty for any task
-    let mut difficulty = 10u32;
-
-    // Add difficulty based on qubit count (Logarithmic or small linear increase)
-    // +1 difficulty for every 4 qubits
-    difficulty += (qubit_count as u32) / 4;
-
-    // Add difficulty based on gate count
-    // +1 difficulty for every 50 gates
-    difficulty += (circuit.len() as u32) / 50;
-
-    // Cap the difficulty to prevent infinite loops (Self-protection)
-    // 32 bits of zero means 4.2 billion hashes on average.
-    // Adjust this based on your CPU power.
-    difficulty.min(32)
-}

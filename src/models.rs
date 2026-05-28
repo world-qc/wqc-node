@@ -10,15 +10,15 @@ pub struct Gate {
 pub struct ComputeRequest {
     pub task_id: String,
     pub parent_task_id: Option<String>,
+    pub circuit_id: String,
+    pub node_id: Option<String>,
     pub global_offset: String,
     pub qubit_count: usize,
-    pub original_qubit_count: Option<usize>,
+    pub original_qubit_count: usize,
     pub circuit: Vec<Gate>,
-    pub memory_cost_kb: u32,
-    pub required_votes: u32,
+    pub required_votes: Option<u32>,
     pub upload_url: Option<String>,
     pub webhook_url: Option<String>,
-    pub difficulty: Option<u32>, // Difficulty calculated by the node
 }
 
 /// Internal task representation after validation and difficulty calculation
@@ -28,11 +28,18 @@ pub struct ComputeTask {
     pub orchestrator_pubkey: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PublicInputs {
+    pub circuit_id: String,
+    pub sub_task_id: String,
+    pub node_id: String,
+    pub output_result_hash: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Proof {
-    pub nonce: u64,
-    pub proof_hash: String,
-    pub iterations: u64,
+    pub public_inputs: PublicInputs,
+    pub stark_proof_b64: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -53,16 +60,12 @@ pub struct WebhookPayload {
     pub proof: Option<Proof>,
     pub error: Option<String>,
     pub execution_time_ms: Option<u64>,
-    pub difficulty: u32,
 }
 
 #[derive(Debug, Serialize)]
 pub struct NodeStatus {
     pub pending_tasks: usize,
     pub max_qubits: usize,
-    pub max_memory_cost_kb: u32,
-    pub min_difficulty: u32,
-    pub max_difficulty: u32,
     pub system_memory_used_kb: u64,
     pub system_memory_total_kb: u64,
     pub cpu_usage_percent: f32,
