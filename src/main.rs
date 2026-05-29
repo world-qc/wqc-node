@@ -17,6 +17,9 @@ use tokio::sync::mpsc;
 use crate::config::NodeConfig;
 use crate::core_client::WqcCoreClient;
 
+use colored::*;
+use sysinfo::{System, RefreshKind, MemoryRefreshKind};
+
 // Global state shared across API handlers
 pub struct AppState {
     task_sender: mpsc::Sender<ComputeTask>,
@@ -42,10 +45,9 @@ async fn main() -> anyhow::Result<()> {
     // Setup Storage
     let storage = storage::Storage::new(&config.database_url)?;
     let pending_from_db = storage.get_pending_tasks()?;
-    tracing::info!("pending tasks: {:#?}", pending_from_db);
     let pending_count = pending_from_db.len();
 
-    let allowed_orchestrators = RwLock::new(HashSet::<String>::new());
+    print_startup_banner(&config, pending_count);
 
     // Setup Channel (Internal Queue)
     let (tx, rx) = mpsc::channel(100);
@@ -58,7 +60,7 @@ async fn main() -> anyhow::Result<()> {
         seen_submit_nonces: Mutex::new(HashMap::new()),
         supported_gates,
         storage,
-        allowed_orchestrators,
+        allowed_orchestrators: RwLock::new(HashSet::<String>::new()),
     });
 
     // Recovery: Re-enqueue pending tasks from DB
@@ -105,4 +107,57 @@ async fn main() -> anyhow::Result<()> {
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+fn print_startup_banner(config: &NodeConfig, recovered_task_count: usize) {
+    let mut sys = System::new_all();
+    sys.refresh_specifics(
+        RefreshKind::new().with_memory(MemoryRefreshKind::everything()),
+    );
+    let total_gb = sys.total_memory() / 1024 / 1024 / 1024;
+    let avail_gb = sys.available_memory() / 1024 / 1024 / 1024;
+
+    println!("{}", "=".repeat(60).bright_blue());
+
+    let wqc_logo = r#"
+██╗    ██╗  ██████╗   ██████╗
+██║    ██║ ██╔═══██╗ ██╔════╝
+██║ █╗ ██║ ██║   ██║ ██║
+██║███╗██║ ██║▄▄ ██║ ██║
+╚███╔███╔╝ ╚██████╔╝ ╚██████╗
+ ╚══╝╚══╝   ╚══▀▀═╝   ╚═════╝ worker-node
+    "#;
+    println!("{}", wqc_logo.bright_cyan().bold());
+
+    println!("  {} {}", "VISION:".dimmed(), "\"We are the Computer.\"".italic().bright_magenta());
+    println!("{}", "-".repeat(60).bright_blue());
+
+    // Status display
+    println!(
+        "  {}  {:15} {}",
+        "●".green(), "Status:".bold(), "Online & Ready".green()
+    );
+    println!(
+        "  {}  {:15} {} GB / {} GB (Available/Total)",
+        "●".blue(), "Memory:".bold(), avail_gb, total_gb
+    );
+    println!(
+        "  {}  {:15} {} Max Qubits (Gate validation active)",
+        "●".magenta(), "Capacity:".bold(), config.max_qubits
+    );
+    println!(
+        "  {}  {:15} {} task(s) recovered from SQLite",
+        "●".yellow(), "Storage:".bold(), recovered_task_count
+    );
+
+    // Network information
+    println!();
+    println!("  {} {}", "➜".bright_yellow(), "Node API Endpoint (Inbound):".bold());
+    println!("    {}", "http://0.0.0.0:8080".underline().bright_cyan());
+    println!("  {} {}", "➜".bright_yellow(), "Backend Core Connection (Outbound):".bold());
+    println!("    {}", config.core_url.underline().bright_cyan());
+    println!();
+    println!("{}", "=".repeat(60).bright_blue());
+    println!("{}", "Node runtime initialized. Waiting for orchestrator workload...".dimmed());
+    println!();
 }
