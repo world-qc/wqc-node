@@ -30,7 +30,8 @@ pub async fn register_node(state: Arc<AppState>, orchestrator_url: &str) -> anyh
         .header("X-WQC-Node-PublicKey", pubkey)
         .header("X-WQC-Nonce", nonce)
         .header("X-WQC-Timestamp", ts)
-        .json(&body)
+        .header("Content-Type", "application/json")
+        .body(body_bytes)
         .send()
         .await?;
 
@@ -52,6 +53,7 @@ pub async fn register_node(state: Arc<AppState>, orchestrator_url: &str) -> anyh
 pub async fn start_heartbeat_loop(state: Arc<AppState>, orchestrator_url: String) {
     let client = Client::builder()
         .timeout(Duration::from_secs(10))
+        .pool_idle_timeout(Duration::from_secs(25)) // Close idle connections before the server does (e.g., typical 30s/60s server limits)
         .build()
         .unwrap_or_default();
 
@@ -83,7 +85,8 @@ pub async fn start_heartbeat_loop(state: Arc<AppState>, orchestrator_url: String
             .header("X-WQC-Node-PublicKey", pubkey)
             .header("X-WQC-Nonce", nonce)
             .header("X-WQC-Timestamp", ts)
-            .json(&status)
+            .header("Content-Type", "application/json")
+            .body(body_bytes)
             .send()
             .await
         {
