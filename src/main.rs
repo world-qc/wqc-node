@@ -40,7 +40,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Fetch Core Capabilities
     let core_client = Arc::new(WqcCoreClient::new(&config.core_url));
-    let supported_gates = handlers::sync_core_capabilities(&config.core_url).await;
+    let supported_gates = handlers::sync_core_capabilities(core_client.clone()).await;
 
     // Setup Storage
     let storage = storage::Storage::new(&config.database_url)?;

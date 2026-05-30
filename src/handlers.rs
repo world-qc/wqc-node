@@ -6,6 +6,7 @@ use std::str::FromStr;
 use crate::models::{ComputeRequest, ComputeTask, Gate, NodeStatus};
 use crate::AppState;
 use crate::auth::verify_request_signature;
+use crate::core_client::WqcCoreClient;
 use crate::validation::validate_circuit_logic;
 
 pub async fn submit_task(
@@ -80,27 +81,14 @@ pub async fn submit_task(
     })))
 }
 
-pub async fn sync_core_capabilities(core_url: &str) -> Vec<String> {
-    let client = reqwest::Client::new();
-    let url = format!("{}/gates", core_url);
-
-    // 1. Send request
-    let response = match client.get(&url).send().await {
-        Ok(res) => res,
-        Err(e) => {
-            tracing::warn!("Could not connect to wqc-core at {}: {}. Using default gates.", url, e);
-            return default_gates();
-        }
-    };
-
-    // 2. Parse JSON
-    match response.json::<Vec<String>>().await {
+pub async fn sync_core_capabilities(core_client: Arc<WqcCoreClient>) -> Vec<String> {
+    match core_client.get_supported_gates().await {
         Ok(gates) => {
             tracing::info!("Synchronized with wqc-core. Supported gates: {:?}", gates);
             gates
         },
         Err(e) => {
-            tracing::error!("Failed to parse gate list from core: {}. Using default gates.", e);
+            tracing::error!("Failed to sync core capabilities: {}. Using default gates.", e);
             default_gates()
         }
     }
