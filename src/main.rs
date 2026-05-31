@@ -1,3 +1,5 @@
+#![deny(unused_imports)]
+
 mod models;
 mod core_client;
 mod config;
@@ -24,6 +26,7 @@ use sysinfo::{System, RefreshKind, MemoryRefreshKind};
 pub struct AppState {
     task_sender: mpsc::Sender<ComputeTask>,
     pending_tasks: AtomicUsize, // Counter for tasks currently in the queue or being processed
+    core_client: Arc<WqcCoreClient>,
     config: NodeConfig,
     seen_submit_nonces: Mutex<HashMap<String, i64>>,
     supported_gates: Vec<String>,
@@ -56,6 +59,7 @@ async fn main() -> anyhow::Result<()> {
     let shared_state = Arc::new(AppState {
         task_sender: tx.clone(), // Clone to send recovered tasks
         pending_tasks: AtomicUsize::new(pending_count),
+        core_client: core_client,
         config: config.clone(),
         seen_submit_nonces: Mutex::new(HashMap::new()),
         supported_gates,
@@ -69,7 +73,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Spawn background worker (Engine communication)
-    tokio::spawn(worker::start_worker(shared_state.clone(), core_client, rx));
+    tokio::spawn(worker::start_worker(shared_state.clone(), rx));
 
     // Router
     let app = Router::new()

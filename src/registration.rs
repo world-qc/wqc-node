@@ -65,7 +65,7 @@ pub async fn start_heartbeat_loop(state: Arc<AppState>, orchestrator_url: String
     loop {
         interval.tick().await;
 
-        let status = collect_node_status(&state);
+        let status = collect_node_status(&state).await;
         let body_bytes = match serde_json::to_vec(&status) {
             Ok(b) => b,
             Err(e) => {

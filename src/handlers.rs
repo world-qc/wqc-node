@@ -1,6 +1,5 @@
 use axum::{body::Bytes, extract::State, http::{HeaderMap, StatusCode}, Json};
 use std::sync::{Arc, atomic::Ordering};
-use sysinfo::{CpuRefreshKind, MemoryRefreshKind, System};
 use num_bigint::BigUint;
 use std::str::FromStr;
 use crate::models::{ComputeRequest, ComputeTask, Gate, NodeStatus};
@@ -99,27 +98,33 @@ fn default_gates() -> Vec<String> {
     vec!["H".into(), "X".into(), "Y".into(), "Z".into(), "CNOT".into()]
 }
 
-pub fn collect_node_status(state: &AppState) -> NodeStatus {
-    let mut sys = System::new_all();
-    // Refresh only what we need for performance
-    sys.refresh_specifics(
-        sysinfo::RefreshKind::new()
-            .with_cpu(CpuRefreshKind::everything())
-            .with_memory(MemoryRefreshKind::everything()),
-    );
-
-    NodeStatus {
-        pending_tasks: state.pending_tasks.load(Ordering::SeqCst),
-        max_qubits: state.config.max_qubits,
-        system_memory_used_kb: sys.used_memory() / 1024,
-        system_memory_total_kb: sys.total_memory() / 1024,
-        cpu_usage_percent: sys.global_cpu_info().cpu_usage(),
-        supported_gates: state.supported_gates.clone(),
+pub async fn collect_node_status(state: &AppState) -> NodeStatus {
+    let result = state.core_client.get_system_info().await;
+    match result {
+        Ok(data) => NodeStatus {
+            pending_tasks: state.pending_tasks.load(Ordering::SeqCst),
+            max_qubits: state.config.max_qubits,
+            system_memory_used_kb: data.system_memory_used_kb,
+            system_memory_total_kb: data.system_memory_total_kb,
+            cpu_usage_percent: data.cpu_usage_percent,
+            supported_gates: state.supported_gates.clone(),
+        },
+        Err(e) => {
+            tracing::error!("Failed to get core system info: {}.", e);
+            NodeStatus {
+                pending_tasks: state.pending_tasks.load(Ordering::SeqCst),
+                max_qubits: state.config.max_qubits,
+                system_memory_used_kb: 0,
+                system_memory_total_kb: 0,
+                cpu_usage_percent: 0.0,
+                supported_gates: state.supported_gates.clone(),
+            }
+        }
     }
 }
 
 pub async fn get_status(State(state): State<Arc<AppState>>) -> Json<NodeStatus> {
-    Json(collect_node_status(&state))
+    Json(collect_node_status(&state).await)
 }
 
 /// If params is an array with a single element, converts it into the numerical value contained within.

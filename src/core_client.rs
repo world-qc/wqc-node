@@ -1,4 +1,4 @@
-use crate::models::{ComputeRequest, ComputeResponse};
+use crate::models::{ComputeRequest, ComputeResponse, CoreSystemInfo};
 use anyhow::{Context, Result};
 use reqwest::{Client, StatusCode};
 use std::time::Duration;
@@ -87,6 +87,24 @@ impl WqcCoreClient {
             Ok(gates) => Ok(gates),
             Err(e) => {
                 anyhow::bail!("Failed to parse gate list from core: {}.", e);
+            }
+        }
+    }
+
+    pub async fn get_system_info(&self) -> Result<CoreSystemInfo> {
+        let url = format!("{}/sysinfo", self.base_url);
+
+        let response = match self.client.get(&url).send().await {
+            Ok(res) => res,
+            Err(e) => {
+                anyhow::bail!("Could not connect to wqc-core at {}: {}.", url, e);
+            }
+        };
+
+        match response.json::<CoreSystemInfo>().await {
+            Ok(data) => Ok(data),
+            Err(e) => {
+                anyhow::bail!("Failed to parse system info from core: {}.", e);
             }
         }
     }

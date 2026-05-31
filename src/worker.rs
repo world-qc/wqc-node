@@ -14,20 +14,18 @@ struct TaskResultData {
 
 pub async fn start_worker(
     state: Arc<AppState>,
-    core_client: Arc<WqcCoreClient>,
     mut rx: mpsc::Receiver<ComputeTask>,
 ) {
     let http_client = reqwest::Client::new();
     tracing::info!("Worker: Started task processing loop");
 
     while let Some(task) = rx.recv().await {
-        process_task(state.clone(), core_client.clone(), &http_client, task).await;
+        process_task(state.clone(), &http_client, task).await;
     }
 }
 
 async fn process_task(
     state: Arc<AppState>,
-    core_client: Arc<WqcCoreClient>,
     http_client: &reqwest::Client,
     mut task: ComputeTask,
 ) {
@@ -43,7 +41,7 @@ async fn process_task(
     tracing::info!("Worker: Starting task {}", task_id);
 
     // Call the abstracted logic
-    let result = execute_compute_and_upload(&core_client, http_client, &task.request).await;
+    let result = execute_compute_and_upload(&state.core_client, http_client, &task.request).await;
 
     // 2. Prepare the result payload for the webhook.
     let payload = match result {

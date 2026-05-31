@@ -71,3 +71,10 @@ pub struct NodeStatus {
     pub cpu_usage_percent: f32,
     pub supported_gates: Vec<String>,
 }
+
+#[derive(Debug, Deserialize)]
+pub struct CoreSystemInfo {
+    pub system_memory_used_kb: u64,
+    pub system_memory_total_kb: u64,
+    pub cpu_usage_percent: f32,
+}
