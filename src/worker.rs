@@ -3,11 +3,11 @@ use std::sync::atomic::Ordering;
 use tokio::sync::mpsc;
 use crate::AppState;
 use crate::auth::generate_wqc_headers;
-use crate::models::{ComputeTask, ComputeRequest, WebhookPayload};
+use crate::models::{ComplexResult, ComputeTask, ComputeRequest, WebhookPayload};
 use crate::core_client::WqcCoreClient;
 
 struct TaskResultData {
-    content_hash: String,
+    complex_result: ComplexResult,
     proof: crate::models::Proof,
     execution_time_ms: u64,
 }
@@ -30,8 +30,6 @@ async fn process_task(
     mut task: ComputeTask,
 ) {
     let task_id = task.request.task_id.clone();
-    let parent_task_id = task.request.parent_task_id.clone();
-    let global_offset = task.request.global_offset.clone();
     let webhook_url = task.request.webhook_url.take();
 
     // Retrieve the orchestrator's public key injected during the handler phase.
@@ -41,16 +39,14 @@ async fn process_task(
     tracing::info!("Worker: Starting task {}", task_id);
 
     // Call the abstracted logic
-    let result = execute_compute_and_upload(&state.core_client, http_client, &task.request).await;
+    let result = execute_compute(&state.core_client, &task.request).await;
 
     // 2. Prepare the result payload for the webhook.
     let payload = match result {
         Ok(data) => WebhookPayload {
             task_id: task_id.clone(),
-            parent_task_id,
-            global_offset,
             status: "success".to_string(),
-            content_hash: Some(data.content_hash),
+            complex_result: Some(data.complex_result),
             proof: Some(data.proof),
             error: None,
             execution_time_ms: Some(data.execution_time_ms),
@@ -59,10 +55,8 @@ async fn process_task(
             tracing::error!("Task {} failed: {}", task_id, e);
             WebhookPayload {
                 task_id: task_id.clone(),
-                parent_task_id,
-                global_offset,
                 status: "error".to_string(),
-                content_hash: None,
+                complex_result: None,
                 proof: None,
                 error: Some(e.to_string()),
                 execution_time_ms: None,
@@ -93,11 +87,10 @@ async fn process_task(
     tracing::info!("Worker: Finished task {}", task_id);
 }
 
-// Core logic that handles computation and S3 upload
+// Core logic that handles computation
 // Returns Success data or an Error
-async fn execute_compute_and_upload(
+async fn execute_compute(
     core_client: &WqcCoreClient,
-    http_client: &reqwest::Client,
     request: &ComputeRequest,
 ) -> anyhow::Result<TaskResultData> {
     // Start timer
@@ -109,30 +102,8 @@ async fn execute_compute_and_upload(
     // Calculate wall-clock time
     let execution_time_ms = start_time.elapsed().as_millis() as u64;
 
-    // 2. Binary conversion
-    let mut binary_data = Vec::with_capacity(res.state_vector.len() * 16);
-    for [real, imag] in &res.state_vector {
-        let r_bytes = real.to_le_bytes();
-        let i_bytes = imag.to_le_bytes();
-        binary_data.extend_from_slice(&r_bytes);
-        binary_data.extend_from_slice(&i_bytes);
-    }
-
-    // 3. Upload to S3 if URL is provided
-    if let Some(url) = &request.upload_url {
-        let resp = http_client.put(url)
-            .header("Content-Type", "application/octet-stream")
-            .body(binary_data)
-            .send()
-            .await?; // HTTP request error
-
-        if !resp.status().is_success() {
-            anyhow::bail!("S3 upload failed with status: {}", resp.status());
-        }
-    }
-
     Ok(TaskResultData {
-        content_hash: res.proof.public_inputs.output_result_hash.clone(),
+        complex_result: res.complex_result,
         proof: res.proof,
         execution_time_ms,
     })

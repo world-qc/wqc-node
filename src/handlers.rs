@@ -1,7 +1,5 @@
 use axum::{body::Bytes, extract::State, http::{HeaderMap, StatusCode}, Json};
 use std::sync::{Arc, atomic::Ordering};
-use num_bigint::BigUint;
-use std::str::FromStr;
 use crate::models::{ComputeRequest, ComputeTask, Gate, NodeStatus};
 use crate::AppState;
 use crate::auth::verify_request_signature;
@@ -25,12 +23,7 @@ pub async fn submit_task(
 
     // 2. Parse and validate the compute request payload.
     let mut payload: ComputeRequest = serde_json::from_slice(&body)
-        .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid JSON body".to_string()))?;
-
-    // Parse BigInt global_offset
-    if BigUint::from_str(&payload.global_offset).is_err() {
-        return Err((StatusCode::BAD_REQUEST, "Invalid global_offset format".to_string()));
-    }
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid JSON body: {}", e)))?;
 
     // Node Capacity Validation (Static Config)
     if payload.qubit_count > state.config.max_qubits {

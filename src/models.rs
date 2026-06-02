@@ -7,17 +7,23 @@ pub struct Gate {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SliceAssignment {
+    pub edge_id: String,
+    pub value: u8,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ComputeRequest {
     pub task_id: String,
     pub parent_task_id: Option<String>,
     pub circuit_id: String,
     pub node_id: Option<String>,
-    pub global_offset: String,
     pub qubit_count: usize,
     pub original_qubit_count: usize,
+    pub slice_id: String,
+    pub slice_assignments: Vec<SliceAssignment>,
     pub circuit: Vec<Gate>,
     pub required_votes: Option<u32>,
-    pub upload_url: Option<String>,
     pub webhook_url: Option<String>,
 }
 
@@ -33,6 +39,7 @@ pub struct PublicInputs {
     pub circuit_id: String,
     pub sub_task_id: String,
     pub node_id: String,
+    pub slice_id: String,
     pub output_result_hash: String,
 }
 
@@ -46,20 +53,24 @@ pub struct Proof {
 pub struct ComputeResponse {
     pub task_id: String,
     pub status: String,
-    pub state_vector: Vec<[f64; 2]>,
+    pub complex_result: ComplexResult,
     pub proof: Proof,
 }
 
 #[derive(Debug, Serialize)]
 pub struct WebhookPayload {
     pub task_id: String,
-    pub parent_task_id: Option<String>,
-    pub global_offset: String,
     pub status: String,
-    pub content_hash: Option<String>,
+    pub complex_result: Option<ComplexResult>,
     pub proof: Option<Proof>,
     pub error: Option<String>,
     pub execution_time_ms: Option<u64>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ComplexResult {
+    pub real: f64,
+    pub imag: f64,
 }
 
 #[derive(Debug, Serialize)]
