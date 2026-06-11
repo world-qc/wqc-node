@@ -7,12 +7,15 @@ license = "GPL-3.0"
 
 [dependencies]
 anyhow = "1.0"
+async-trait = "0.1"
 axum = "0.7"
 base64 = "0.22"
+colored = "2.1"
 ed25519-dalek = "2.1"
-hex = "0.4"
+futures = "0.3"
+libp2p = { version = "0.54", features = ["tokio", "gossipsub", "macros", "tcp", "quic", "noise", "yamux", "identify", "ping"] }
+libp2p-stream = "0.2.0-alpha"
 num-bigint = { version = "0.4", features = ["serde"] }
-# num-traits = "0.2"
 reqwest = { version = "0.12", features = ["json"] }
 rusqlite = { version = "0.39", features = ["bundled"] }
 serde = { version = "1.0", features = ["derive"] }
@@ -24,10 +27,6 @@ tokio = { version = "1.0", features = ["full"] }
 tower-http = { version = "0.5", features = ["cors"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"
-uuid = { version = "1", features = ["v4"] }
-colored = "2.1"
-# Future-proofing for potential P2P expansion
-# libp2p = "0.51" # Add when needed
 
 [profile.release]
 opt-level = 3

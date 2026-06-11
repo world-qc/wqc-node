@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Gate {
-    pub r#type: String, // Use r#type because 'type' is a reserved keyword in Rust
-    pub params: serde_json::Value, // Can be i32 or Vec<i32>
+    pub r#type: String,
+    pub params: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -24,13 +24,11 @@ pub struct ComputeRequest {
     pub slice_assignments: Vec<SliceAssignment>,
     pub circuit: Vec<Gate>,
     pub required_votes: Option<u32>,
-    pub webhook_url: Option<String>,
 }
 
-/// Internal task representation after validation and difficulty calculation
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ComputeTask {
-    pub request: ComputeRequest, // Original request data
+    pub request: ComputeRequest,
     pub orchestrator_pubkey: String,
 }
 
@@ -58,7 +56,7 @@ pub struct ComputeResponse {
 }
 
 #[derive(Debug, Serialize)]
-pub struct WebhookPayload {
+pub struct TaskResultPayload {
     pub task_id: String,
     pub status: String,
     pub complex_result: Option<ComplexResult>,

@@ -1,4 +1,14 @@
-use crate::models::Gate;
+use crate::domain::models::Gate;
+
+pub fn normalize_gate_params(circuit: &mut [Gate]) {
+    for gate in circuit.iter_mut() {
+        if let Some(arr) = gate.params.as_array() {
+            if arr.len() == 1 {
+                gate.params = arr[0].clone();
+            }
+        }
+    }
+}
 
 pub fn validate_circuit_logic(
     circuit: &[Gate],
