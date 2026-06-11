@@ -3,6 +3,7 @@ use serde::Deserialize;
 use crate::domain::models::{Gate, SliceAssignment};
 
 pub const ANNOUNCEMENT_TOPIC: &str = "wqc-global-announcements";
+pub const PROTOCOL_ANNOUNCE: &str = "/wqc/task-announce/1.0.0";
 pub const PROTOCOL_DISPATCH: &str = "/wqc/tensor-dispatch/1.0.0";
 
 /// TaskAnnouncement mirrors the orchestrator gossip payload.

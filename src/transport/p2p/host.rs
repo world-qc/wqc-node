@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use futures::StreamExt;
 use libp2p::gossipsub::{self, IdentTopic, IdentityTransform, MessageAuthenticity};
+use libp2p::identify;
 use libp2p::swarm::{NetworkBehaviour, SwarmEvent};
 use libp2p::{noise, tcp, yamux, Multiaddr, StreamProtocol, SwarmBuilder};
 use libp2p_stream as stream;
@@ -11,13 +12,15 @@ use tokio::sync::Mutex;
 use crate::application::state::AppState;
 use crate::config::{libp2p_keypair_from_signing_key, NodeConfig};
 use crate::domain::bid;
-use crate::domain::p2p::{TaskAnnouncement, ANNOUNCEMENT_TOPIC, PROTOCOL_DISPATCH};
+use crate::domain::p2p::{TaskAnnouncement, ANNOUNCEMENT_TOPIC, PROTOCOL_ANNOUNCE, PROTOCOL_DISPATCH};
 use crate::domain::result::PROTOCOL_RESULT;
+use crate::transport::p2p::announce_handler::spawn_announce_handler;
 use crate::transport::p2p::bid_client::{spawn_incoming_stream_sink, BidClient};
 use crate::transport::p2p::dispatch_handler::spawn_dispatch_handler;
 
 #[derive(NetworkBehaviour)]
 struct NodeBehaviour {
+    identify: identify::Behaviour,
     gossipsub: gossipsub::Behaviour<IdentityTransform>,
     stream: stream::Behaviour,
 }
@@ -34,8 +37,14 @@ async fn run(config: NodeConfig, state: Arc<AppState>) -> anyhow::Result<()> {
     let keypair = libp2p_keypair_from_signing_key(&config.signing_key)?;
     let local_peer_id = keypair.public().to_peer_id();
 
+    // Small star mesh: default D=6 never forms with a single bootstrap peer.
     let gossipsub_config = gossipsub::ConfigBuilder::default()
         .heartbeat_interval(Duration::from_secs(1))
+        .mesh_n(1)
+        .mesh_n_low(1)
+        .mesh_n_high(3)
+        .mesh_outbound_min(0)
+        .flood_publish(true)
         .build()
         .map_err(|e| anyhow::anyhow!("gossipsub config: {}", e))?;
 
@@ -46,9 +55,6 @@ async fn run(config: NodeConfig, state: Arc<AppState>) -> anyhow::Result<()> {
     .map_err(|e| anyhow::anyhow!("gossipsub behaviour: {}", e))?;
 
     let topic = IdentTopic::new(ANNOUNCEMENT_TOPIC);
-    gossipsub_behaviour
-        .subscribe(&topic)
-        .map_err(|e| anyhow::anyhow!("gossipsub subscribe: {}", e))?;
 
     let mut swarm = SwarmBuilder::with_existing_identity(keypair)
         .with_tokio()
@@ -58,20 +64,30 @@ async fn run(config: NodeConfig, state: Arc<AppState>) -> anyhow::Result<()> {
             yamux::Config::default,
         )?
         .with_quic()
-        .with_behaviour(|_| NodeBehaviour {
-            gossipsub: gossipsub_behaviour,
-            stream: stream::Behaviour::new(),
+        .with_behaviour(|key| {
+            let identify =
+                identify::Behaviour::new(identify::Config::new("/wqc/1.0.0".into(), key.public()));
+            NodeBehaviour {
+                identify,
+                gossipsub: gossipsub_behaviour,
+                stream: stream::Behaviour::new(),
+            }
         })?
         .with_swarm_config(|cfg| cfg.with_idle_connection_timeout(Duration::from_secs(60)))
         .build();
 
     let bid_protocol = StreamProtocol::new(bid::PROTOCOL_BID);
+    let announce_protocol = StreamProtocol::new(PROTOCOL_ANNOUNCE);
     let dispatch_protocol = StreamProtocol::new(PROTOCOL_DISPATCH);
     let mut register_control = swarm.behaviour().stream.new_control();
     let bid_incoming = register_control
         .accept(bid_protocol)
         .map_err(|e| anyhow::anyhow!("failed to register bid stream protocol: {:?}", e))?;
     spawn_incoming_stream_sink(bid_incoming);
+
+    let announce_incoming = register_control
+        .accept(announce_protocol)
+        .map_err(|e| anyhow::anyhow!("failed to register announce stream protocol: {:?}", e))?;
 
     let dispatch_incoming = register_control
         .accept(dispatch_protocol)
@@ -91,6 +107,14 @@ async fn run(config: NodeConfig, state: Arc<AppState>) -> anyhow::Result<()> {
     let orchestrator_peer_id = config
         .orchestrator_peer_id
         .ok_or_else(|| anyhow::anyhow!("WQC_ORCHESTRATOR_BOOTSTRAP must include /p2p/<peer-id>"))?;
+
+    spawn_announce_handler(
+        announce_incoming,
+        bid_control.clone(),
+        config.clone(),
+        state.clone(),
+        orchestrator_peer_id,
+    );
 
     spawn_dispatch_handler(
         dispatch_incoming,
@@ -127,6 +151,15 @@ async fn run(config: NodeConfig, state: Arc<AppState>) -> anyhow::Result<()> {
 
     loop {
         match swarm.select_next_some().await {
+            SwarmEvent::Behaviour(NodeBehaviourEvent::Gossipsub(
+                gossipsub::Event::Subscribed { peer_id, topic: subscribed_topic },
+            )) => {
+                tracing::info!(
+                    "[P2P Gossip] Peer {} subscribed to {}",
+                    peer_id,
+                    subscribed_topic
+                );
+            }
             SwarmEvent::Behaviour(NodeBehaviourEvent::Gossipsub(
                 gossipsub::Event::Message { message, .. },
             )) => {
@@ -167,6 +200,26 @@ async fn run(config: NodeConfig, state: Arc<AppState>) -> anyhow::Result<()> {
             }
             SwarmEvent::ConnectionEstablished { peer_id, .. } => {
                 tracing::info!("[P2P] Connected to peer {}", peer_id);
+                if peer_id == orchestrator_peer_id {
+                    // Workaround rust-libp2p #1671: re-announce subscription after dial so the
+                    // bootstrap peer learns we are on the topic.
+                    swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer_id);
+                    match swarm.behaviour_mut().gossipsub.subscribe(&topic) {
+                        Ok(true) => tracing::info!(
+                            "[P2P Gossip] Subscribed to {} after connecting to orchestrator",
+                            ANNOUNCEMENT_TOPIC
+                        ),
+                        Ok(false) => tracing::debug!(
+                            "[P2P Gossip] Already subscribed to {} on orchestrator connect",
+                            ANNOUNCEMENT_TOPIC
+                        ),
+                        Err(e) => tracing::warn!(
+                            "[P2P Gossip] Re-subscribe to {} failed: {:?}",
+                            ANNOUNCEMENT_TOPIC,
+                            e
+                        ),
+                    }
+                }
             }
             SwarmEvent::ConnectionClosed { peer_id, .. } => {
                 tracing::info!("[P2P] Disconnected from peer {}", peer_id);

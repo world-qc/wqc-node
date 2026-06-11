@@ -25,6 +25,7 @@ pub struct Bid {
     pub max_qubit_capability: u32,
     pub current_load_factors: u32,
     pub timestamp: i64,
+    pub lottery_attempt: u64,
     #[serde(serialize_with = "serialize_bytes_as_base64")]
     pub signature: Vec<u8>,
     #[serde(serialize_with = "serialize_bytes_as_base64")]
@@ -50,7 +51,7 @@ pub fn build_signed_bid(
     config: &NodeConfig,
     current_load: u32,
 ) -> Option<Bid> {
-    let (timestamp, lottery_proof) =
+    let (timestamp, lottery_attempt, lottery_proof) =
         mine_lottery(&config.peer_id, announcement.nonce, announcement.bid_difficulty)?;
 
     let bid = Bid {
@@ -59,6 +60,7 @@ pub fn build_signed_bid(
         max_qubit_capability: config.max_qubits as u32,
         current_load_factors: current_load,
         timestamp,
+        lottery_attempt,
         signature: Vec::new(),
         lottery_proof,
         stake_amount: config.stake_amount.clone(),
@@ -81,24 +83,28 @@ pub fn serialize_bid_payload(bid: &Bid) -> Vec<u8> {
     payload.extend_from_slice(&bid.max_qubit_capability.to_be_bytes());
     payload.extend_from_slice(&bid.current_load_factors.to_be_bytes());
     payload.extend_from_slice(&bid.timestamp.to_be_bytes());
+    payload.extend_from_slice(&bid.lottery_attempt.to_be_bytes());
     payload.extend_from_slice(&bid.lottery_proof);
     payload
 }
 
-fn mine_lottery(node_id: &str, nonce: u64, difficulty: u32) -> Option<(i64, Vec<u8>)> {
+fn mine_lottery(node_id: &str, nonce: u64, difficulty: u32) -> Option<(i64, u64, Vec<u8>)> {
+    let timestamp = chrono_lottery_timestamp();
+
     if difficulty == 0 {
-        let now = chrono_lottery_timestamp();
-        let proof = lottery_hash(node_id, nonce, now);
-        return Some((now, proof));
+        let proof = lottery_hash(node_id, nonce, timestamp, 0);
+        return Some((timestamp, 0, proof));
     }
 
-    let start = chrono_lottery_timestamp();
-    let end = start + LOTTERY_TIME_WINDOW_SECS;
-    for timestamp in start..=end {
-        let proof = lottery_hash(node_id, nonce, timestamp);
+    let deadline =
+        std::time::Instant::now() + std::time::Duration::from_secs(LOTTERY_TIME_WINDOW_SECS as u64);
+    let mut attempt: u64 = 0;
+    while std::time::Instant::now() < deadline {
+        let proof = lottery_hash(node_id, nonce, timestamp, attempt);
         if meets_difficulty(&proof, difficulty) {
-            return Some((timestamp, proof));
+            return Some((timestamp, attempt, proof));
         }
+        attempt = attempt.wrapping_add(1);
     }
     None
 }
@@ -110,11 +116,12 @@ fn chrono_lottery_timestamp() -> i64 {
         .unwrap_or(0)
 }
 
-fn lottery_hash(node_id: &str, nonce: u64, timestamp: i64) -> Vec<u8> {
+fn lottery_hash(node_id: &str, nonce: u64, timestamp: i64, attempt: u64) -> Vec<u8> {
     let mut hasher = Sha256::new();
     hasher.update(node_id.as_bytes());
     hasher.update(nonce.to_be_bytes());
     hasher.update((timestamp as u64).to_be_bytes());
+    hasher.update(attempt.to_be_bytes());
     hasher.finalize().to_vec()
 }
 
@@ -154,6 +161,7 @@ mod tests {
             max_qubit_capability: 25,
             current_load_factors: 1,
             timestamp: 1_717_776_000,
+            lottery_attempt: 7,
             signature: Vec::new(),
             lottery_proof: vec![0xAA, 0xBB],
             stake_amount: BigInt::from(50_000),
@@ -166,13 +174,14 @@ mod tests {
         expected.extend_from_slice(&25u32.to_be_bytes());
         expected.extend_from_slice(&1u32.to_be_bytes());
         expected.extend_from_slice(&1_717_776_000i64.to_be_bytes());
+        expected.extend_from_slice(&7u64.to_be_bytes());
         expected.extend_from_slice(&[0xAA, 0xBB]);
         assert_eq!(payload, expected);
     }
 
     #[test]
     fn lottery_hash_matches_go_layout() {
-        let hash = lottery_hash("12D3KooWTest", 42, 1_717_776_000);
+        let hash = lottery_hash("12D3KooWTest", 42, 1_717_776_000, 0);
         assert_eq!(hash.len(), 32);
     }
 }
