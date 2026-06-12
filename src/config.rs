@@ -13,6 +13,7 @@ pub struct NodeConfig {
     pub peer_id: String,
     pub core_url: String,
     pub max_qubits: usize,
+    pub compute_timeout_secs: u64,
     pub signing_key: SigningKey,
     pub bootstrap_peers: Vec<String>,
     pub p2p_listen_port: u16,
@@ -32,6 +33,10 @@ impl NodeConfig {
             .unwrap_or_else(|_| "30".to_string())
             .parse()
             .unwrap_or(30);
+        let compute_timeout_secs = env::var("WQC_COMPUTE_TIMEOUT_SECS")
+            .unwrap_or_else(|_| "300".to_string())
+            .parse()
+            .context("WQC_COMPUTE_TIMEOUT_SECS must be a valid positive integer")?;
         let signing_key = load_signing_key_from_env()?;
         let peer_id = libp2p_keypair_from_signing_key(&signing_key)?
             .public()
@@ -77,7 +82,11 @@ impl NodeConfig {
         )
         .filter(|s| !s.is_empty());
 
-        tracing::info!("Node Config Loaded: Max Qubits = {}", max_qubits);
+        tracing::info!(
+            "Node Config Loaded: Max Qubits = {}, Compute Timeout = {}s",
+            max_qubits,
+            compute_timeout_secs
+        );
         tracing::info!("Node libp2p PeerID: {}", peer_id);
         if let Some(peer) = orchestrator_peer_id {
             tracing::info!("Orchestrator libp2p PeerID: {}", peer);
@@ -87,6 +96,7 @@ impl NodeConfig {
             peer_id,
             core_url,
             max_qubits,
+            compute_timeout_secs,
             signing_key,
             bootstrap_peers,
             p2p_listen_port,

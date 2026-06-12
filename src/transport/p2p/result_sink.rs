@@ -25,12 +25,36 @@ impl ResultSink for P2pResultSink {
         task: &ComputeTask,
         payload: TaskResultPayload,
     ) -> anyhow::Result<()> {
+        let orchestrator_peer_id = self
+            .state
+            .config
+            .orchestrator_peer_id
+            .ok_or_else(|| anyhow::anyhow!("WQC_ORCHESTRATOR_BOOTSTRAP must include /p2p/<peer-id>"))?;
+
+        let control = self
+            .state
+            .p2p_stream_control
+            .lock()
+            .await
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("P2P stream control is not ready yet"))?;
+
         if payload.status != "success" {
-            tracing::error!(
-                "[P2P Result] Task {} failed locally; orchestrator requires a verified proof: {:?}",
+            let error = payload
+                .error
+                .unwrap_or_else(|| "compute failed".to_string());
+            tracing::warn!(
+                "[P2P Result] Reporting compute failure for sub_task_id={}: {}",
                 payload.task_id,
-                payload.error
+                error
             );
+
+            let body = ResultMessage::failure_json_bytes(
+                &task.request.task_id,
+                &self.state.config.peer_id,
+                &error,
+            )?;
+            write_outbound_stream(&control, orchestrator_peer_id, PROTOCOL_RESULT, &body).await?;
             return Ok(());
         }
 
@@ -41,12 +65,6 @@ impl ResultSink for P2pResultSink {
             .proof
             .ok_or_else(|| anyhow::anyhow!("missing proof for successful task"))?;
 
-        let orchestrator_peer_id = self
-            .state
-            .config
-            .orchestrator_peer_id
-            .ok_or_else(|| anyhow::anyhow!("WQC_ORCHESTRATOR_BOOTSTRAP must include /p2p/<peer-id>"))?;
-
         let message = ResultMessage {
             sub_task_id: task.request.task_id.clone(),
             node_id: self.state.config.peer_id.clone(),
@@ -56,14 +74,6 @@ impl ResultSink for P2pResultSink {
         };
 
         let body = message.to_json_bytes()?;
-        let control = self
-            .state
-            .p2p_stream_control
-            .lock()
-            .await
-            .clone()
-            .ok_or_else(|| anyhow::anyhow!("P2P stream control is not ready yet"))?;
-
         write_outbound_stream(&control, orchestrator_peer_id, PROTOCOL_RESULT, &body).await?;
 
         tracing::info!(

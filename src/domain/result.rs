@@ -12,6 +12,20 @@ pub struct ResultMessage {
 }
 
 impl ResultMessage {
+    pub fn failure_json_bytes(
+        sub_task_id: &str,
+        node_id: &str,
+        error: &str,
+    ) -> anyhow::Result<Vec<u8>> {
+        let body = format!(
+            r#"{{"sub_task_id":{},"node_id":{},"error":{}}}"#,
+            serde_json::to_string(sub_task_id)?,
+            serde_json::to_string(node_id)?,
+            serde_json::to_string(error)?,
+        );
+        Ok(body.into_bytes())
+    }
+
     pub fn to_json_bytes(&self) -> anyhow::Result<Vec<u8>> {
         let complex_json = format_go_complex_result_json(&self.complex_result);
         let proof_json = serde_json::to_string(&self.proof)?;
@@ -60,5 +74,16 @@ mod tests {
             imag: 1.0,
         });
         assert_eq!(json, r#"{"real":0.0,"imag":1.0}"#);
+    }
+
+    #[test]
+    fn failure_json_omits_proof_and_result() {
+        let body = ResultMessage::failure_json_bytes("sub-1", "node-1", "timeout").unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["sub_task_id"], "sub-1");
+        assert_eq!(json["node_id"], "node-1");
+        assert_eq!(json["error"], "timeout");
+        assert!(json.get("proof").is_none());
+        assert!(json.get("complex_result").is_none());
     }
 }

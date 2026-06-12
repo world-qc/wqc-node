@@ -17,6 +17,8 @@ use colored::*;
 use sysinfo::{MemoryRefreshKind, RefreshKind, System};
 use tokio::sync::mpsc;
 
+use std::time::Duration;
+
 use application::state::AppState;
 use application::worker;
 use config::NodeConfig;
@@ -31,7 +33,10 @@ async fn main() -> anyhow::Result<()> {
 
     let config = NodeConfig::from_env()?;
 
-    let core_client = Arc::new(WqcCoreClient::new(&config.core_url));
+    let core_client = Arc::new(WqcCoreClient::new(
+        &config.core_url,
+        Duration::from_secs(config.compute_timeout_secs),
+    ));
     let supported_gates = handlers::sync_core_capabilities(core_client.clone()).await;
 
     let storage = infra::storage::Storage::new(&config.database_url)?;

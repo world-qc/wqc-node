@@ -6,10 +6,11 @@ use std::time::Duration;
 pub struct WqcCoreClient {
     client: Client,
     base_url: String,
+    compute_timeout: Duration,
 }
 
 impl WqcCoreClient {
-    pub fn new(core_url: &str) -> Self {
+    pub fn new(core_url: &str, compute_timeout: Duration) -> Self {
         if core_url.starts_with("unix:") {
             let socket_path = core_url.trim_start_matches("unix:");
 
@@ -29,6 +30,7 @@ impl WqcCoreClient {
             Self {
                 client,
                 base_url: "http://localhost".to_string(),
+                compute_timeout,
             }
         } else {
             Self {
@@ -37,6 +39,7 @@ impl WqcCoreClient {
                     .build()
                     .expect("Failed to build HTTP client"),
                 base_url: core_url.trim_end_matches('/').to_string(),
+                compute_timeout,
             }
         }
     }
@@ -47,7 +50,7 @@ impl WqcCoreClient {
         let response = self
             .client
             .post(&url)
-            .timeout(Duration::from_secs(300))
+            .timeout(self.compute_timeout)
             .json(&request)
             .send()
             .await
