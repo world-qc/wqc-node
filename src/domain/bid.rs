@@ -75,7 +75,9 @@ pub fn build_signed_bid(
     })
 }
 
-/// Mirrors orchestrator `serializeBidPayload` byte layout exactly.
+/// Mirrors orchestrator `bid.SerializeBidPayload` byte layout exactly.
+///
+/// All fixed-width integers are big-endian (network byte order).
 pub fn serialize_bid_payload(bid: &Bid) -> Vec<u8> {
     let mut payload = Vec::new();
     payload.extend_from_slice(bid.task_id.as_bytes());
@@ -116,6 +118,7 @@ fn chrono_lottery_timestamp() -> i64 {
         .unwrap_or(0)
 }
 
+/// SHA256(node_id || nonce_be || timestamp_as_u64_be || attempt_be).
 fn lottery_hash(node_id: &str, nonce: u64, timestamp: i64, attempt: u64) -> Vec<u8> {
     let mut hasher = Sha256::new();
     hasher.update(node_id.as_bytes());
@@ -180,8 +183,15 @@ mod tests {
     }
 
     #[test]
-    fn lottery_hash_matches_go_layout() {
+    fn lottery_hash_matches_go_golden_vector() {
         let hash = lottery_hash("12D3KooWTest", 42, 1_717_776_000, 0);
-        assert_eq!(hash.len(), 32);
+        assert_eq!(
+            hash,
+            [
+                0x6e, 0x53, 0xa4, 0x11, 0x24, 0xed, 0x5c, 0xa6, 0xbc, 0x0c, 0x82, 0xb4, 0xd9,
+                0x27, 0x12, 0x4a, 0x7f, 0xb6, 0xd0, 0x8f, 0xa4, 0x23, 0xb3, 0xe5, 0x05, 0x08,
+                0x9c, 0x8a, 0x8f, 0xa6, 0x65, 0xb2,
+            ]
+        );
     }
 }
