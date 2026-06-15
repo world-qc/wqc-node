@@ -1,13 +1,15 @@
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
 use futures::StreamExt;
 use libp2p::gossipsub::{self, IdentTopic, IdentityTransform, MessageAuthenticity};
 use libp2p::identify;
-use libp2p::swarm::{NetworkBehaviour, SwarmEvent};
-use libp2p::{noise, tcp, yamux, Multiaddr, StreamProtocol, SwarmBuilder};
+use libp2p::swarm::{NetworkBehaviour, Swarm, SwarmEvent};
+use libp2p::{noise, tcp, yamux, Multiaddr, PeerId, StreamProtocol, SwarmBuilder};
 use libp2p_stream as stream;
 use tokio::sync::Mutex;
+use tokio::time::Sleep;
 
 use crate::application::state::AppState;
 use crate::config::{libp2p_keypair_from_signing_key, NodeConfig};
@@ -17,6 +19,53 @@ use crate::domain::result::PROTOCOL_RESULT;
 use crate::transport::p2p::announce_handler::spawn_announce_handler;
 use crate::transport::p2p::bid_client::{spawn_incoming_stream_sink, BidClient};
 use crate::transport::p2p::dispatch_handler::spawn_dispatch_handler;
+
+const BOOTSTRAP_REDIAL_INITIAL: Duration = Duration::from_secs(1);
+const BOOTSTRAP_REDIAL_MAX: Duration = Duration::from_secs(60);
+
+/// Exponential backoff for orchestrator bootstrap redial (1s, 2s, 4s, … capped at 60s).
+fn bootstrap_redial_delay(attempt: u32) -> Duration {
+    let shift = attempt.min(16);
+    let multiplier = 1u32.checked_shl(shift).unwrap_or(u32::MAX);
+    BOOTSTRAP_REDIAL_INITIAL
+        .saturating_mul(multiplier)
+        .min(BOOTSTRAP_REDIAL_MAX)
+}
+
+fn parse_bootstrap_addrs(peers: &[String]) -> Vec<Multiaddr> {
+    peers
+        .iter()
+        .filter_map(|peer| match peer.parse::<Multiaddr>() {
+            Ok(addr) => Some(addr),
+            Err(e) => {
+                tracing::warn!("Invalid bootstrap multiaddr '{}': {}", peer, e);
+                None
+            }
+        })
+        .collect()
+}
+
+fn dial_bootstrap_peers(swarm: &mut Swarm<NodeBehaviour>, addrs: &[Multiaddr], label: &str) {
+    for addr in addrs {
+        match swarm.dial(addr.clone()) {
+            Ok(()) => tracing::info!("[P2P] {label} bootstrap peer {addr}"),
+            Err(e) => tracing::warn!("[P2P] Failed to {label} bootstrap peer {addr}: {e}"),
+        }
+    }
+}
+
+fn schedule_bootstrap_redial(
+    attempt: u32,
+    sleep: &mut Option<Pin<Box<Sleep>>>,
+) {
+    let delay = bootstrap_redial_delay(attempt);
+    tracing::info!(
+        "[P2P] Scheduling bootstrap redial in {:?} (attempt {})",
+        delay,
+        attempt
+    );
+    *sleep = Some(Box::pin(tokio::time::sleep(delay)));
+}
 
 #[derive(NetworkBehaviour)]
 struct NodeBehaviour {
@@ -130,18 +179,8 @@ async fn run(config: NodeConfig, state: Arc<AppState>) -> anyhow::Result<()> {
     swarm.listen_on(tcp_addr)?;
     swarm.listen_on(quic_addr)?;
 
-    for peer in &config.bootstrap_peers {
-        match peer.parse::<Multiaddr>() {
-            Ok(addr) => {
-                if let Err(e) = swarm.dial(addr.clone()) {
-                    tracing::warn!("Failed to dial bootstrap peer {}: {}", addr, e);
-                } else {
-                    tracing::info!("Dialing bootstrap peer {}", addr);
-                }
-            }
-            Err(e) => tracing::warn!("Invalid bootstrap multiaddr '{}': {}", peer, e),
-        }
-    }
+    let bootstrap_addrs = parse_bootstrap_addrs(&config.bootstrap_peers);
+    dial_bootstrap_peers(&mut swarm, &bootstrap_addrs, "Dialing");
 
     tracing::info!(
         "P2P host started (peer_id={}, listen_port={})",
@@ -149,82 +188,152 @@ async fn run(config: NodeConfig, state: Arc<AppState>) -> anyhow::Result<()> {
         config.p2p_listen_port
     );
 
+    let mut redial_attempt: u32 = 0;
+    let mut redial_sleep: Option<Pin<Box<Sleep>>> = None;
+
     loop {
-        match swarm.select_next_some().await {
-            SwarmEvent::Behaviour(NodeBehaviourEvent::Gossipsub(
-                gossipsub::Event::Subscribed { peer_id, topic: subscribed_topic },
-            )) => {
-                tracing::info!(
-                    "[P2P Gossip] Peer {} subscribed to {}",
-                    peer_id,
-                    subscribed_topic
+        tokio::select! {
+            event = swarm.select_next_some() => {
+                handle_swarm_event(
+                    event,
+                    &mut swarm,
+                    &topic,
+                    orchestrator_peer_id,
+                    &bid_control,
+                    &config,
+                    &state,
+                    &mut redial_attempt,
+                    &mut redial_sleep,
                 );
             }
-            SwarmEvent::Behaviour(NodeBehaviourEvent::Gossipsub(
-                gossipsub::Event::Message { message, .. },
-            )) => {
-                match serde_json::from_slice::<TaskAnnouncement>(&message.data) {
-                    Ok(announcement) => {
-                        tracing::info!(
-                            "[P2P Gossip] TaskAnnouncement task_id={} qubits={} difficulty={}",
-                            announcement.task_id,
-                            announcement.global_qubit_count,
-                            announcement.bid_difficulty
-                        );
-
-                        let control = bid_control.clone();
-                        let node_config = config.clone();
-                        let node_state = state.clone();
-                        let announcement_clone = announcement.clone();
-                        tokio::spawn(async move {
-                            let client = BidClient::new(control, node_config, node_state);
-                            if let Err(e) = client
-                                .submit_bid(announcement_clone, orchestrator_peer_id)
-                                .await
-                            {
-                                tracing::warn!("[P2P Bid] Failed to submit bid: {}", e);
-                            }
-                        });
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            "[P2P Gossip] Failed to decode announcement on topic {}: {}",
-                            message.topic,
-                            e
-                        );
-                    }
+            _ = async {
+                match &mut redial_sleep {
+                    Some(sleep) => sleep.as_mut().await,
+                    None => std::future::pending::<()>().await,
+                }
+            } => {
+                redial_attempt = redial_attempt.saturating_add(1);
+                dial_bootstrap_peers(&mut swarm, &bootstrap_addrs, "Redialing");
+                redial_sleep = None;
+                if !swarm
+                    .connected_peers()
+                    .any(|peer_id| *peer_id == orchestrator_peer_id)
+                {
+                    schedule_bootstrap_redial(redial_attempt, &mut redial_sleep);
                 }
             }
-            SwarmEvent::NewListenAddr { address, .. } => {
-                tracing::info!("[P2P] Listening on {}/p2p/{}", address, local_peer_id);
-            }
-            SwarmEvent::ConnectionEstablished { peer_id, .. } => {
-                tracing::info!("[P2P] Connected to peer {}", peer_id);
-                if peer_id == orchestrator_peer_id {
-                    // Workaround rust-libp2p #1671: re-announce subscription after dial so the
-                    // bootstrap peer learns we are on the topic.
-                    swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer_id);
-                    match swarm.behaviour_mut().gossipsub.subscribe(&topic) {
-                        Ok(true) => tracing::info!(
-                            "[P2P Gossip] Subscribed to {} after connecting to orchestrator",
-                            ANNOUNCEMENT_TOPIC
-                        ),
-                        Ok(false) => tracing::debug!(
-                            "[P2P Gossip] Already subscribed to {} on orchestrator connect",
-                            ANNOUNCEMENT_TOPIC
-                        ),
-                        Err(e) => tracing::warn!(
-                            "[P2P Gossip] Re-subscribe to {} failed: {:?}",
-                            ANNOUNCEMENT_TOPIC,
-                            e
-                        ),
-                    }
-                }
-            }
-            SwarmEvent::ConnectionClosed { peer_id, .. } => {
-                tracing::info!("[P2P] Disconnected from peer {}", peer_id);
-            }
-            _ => {}
         }
+    }
+}
+
+fn handle_swarm_event(
+    event: SwarmEvent<NodeBehaviourEvent>,
+    swarm: &mut Swarm<NodeBehaviour>,
+    topic: &IdentTopic,
+    orchestrator_peer_id: PeerId,
+    bid_control: &Arc<Mutex<stream::Control>>,
+    config: &NodeConfig,
+    state: &Arc<AppState>,
+    redial_attempt: &mut u32,
+    redial_sleep: &mut Option<Pin<Box<Sleep>>>,
+) {
+    match event {
+        SwarmEvent::Behaviour(NodeBehaviourEvent::Gossipsub(
+            gossipsub::Event::Subscribed { peer_id, topic: subscribed_topic },
+        )) => {
+            tracing::info!(
+                "[P2P Gossip] Peer {} subscribed to {}",
+                peer_id,
+                subscribed_topic
+            );
+        }
+        SwarmEvent::Behaviour(NodeBehaviourEvent::Gossipsub(
+            gossipsub::Event::Message { message, .. },
+        )) => {
+            match serde_json::from_slice::<TaskAnnouncement>(&message.data) {
+                Ok(announcement) => {
+                    tracing::info!(
+                        "[P2P Gossip] TaskAnnouncement task_id={} qubits={} difficulty={}",
+                        announcement.task_id,
+                        announcement.global_qubit_count,
+                        announcement.bid_difficulty
+                    );
+
+                    let control = bid_control.clone();
+                    let node_config = config.clone();
+                    let node_state = state.clone();
+                    let announcement_clone = announcement.clone();
+                    tokio::spawn(async move {
+                        let client = BidClient::new(control, node_config, node_state);
+                        if let Err(e) = client
+                            .submit_bid(announcement_clone, orchestrator_peer_id)
+                            .await
+                        {
+                            tracing::warn!("[P2P Bid] Failed to submit bid: {}", e);
+                        }
+                    });
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "[P2P Gossip] Failed to decode announcement on topic {}: {}",
+                        message.topic,
+                        e
+                    );
+                }
+            }
+        }
+        SwarmEvent::NewListenAddr { address, .. } => {
+            tracing::info!(
+                "[P2P] Listening on {}/p2p/{}",
+                address,
+                swarm.local_peer_id()
+            );
+        }
+        SwarmEvent::ConnectionEstablished { peer_id, .. } => {
+            tracing::info!("[P2P] Connected to peer {}", peer_id);
+            if peer_id == orchestrator_peer_id {
+                *redial_attempt = 0;
+                *redial_sleep = None;
+                // Workaround rust-libp2p #1671: re-announce subscription after dial so the
+                // bootstrap peer learns we are on the topic.
+                swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer_id);
+                match swarm.behaviour_mut().gossipsub.subscribe(topic) {
+                    Ok(true) => tracing::info!(
+                        "[P2P Gossip] Subscribed to {} after connecting to orchestrator",
+                        ANNOUNCEMENT_TOPIC
+                    ),
+                    Ok(false) => tracing::debug!(
+                        "[P2P Gossip] Already subscribed to {} on orchestrator connect",
+                        ANNOUNCEMENT_TOPIC
+                    ),
+                    Err(e) => tracing::warn!(
+                        "[P2P Gossip] Re-subscribe to {} failed: {:?}",
+                        ANNOUNCEMENT_TOPIC,
+                        e
+                    ),
+                }
+            }
+        }
+        SwarmEvent::ConnectionClosed { peer_id, .. } => {
+            tracing::info!("[P2P] Disconnected from peer {}", peer_id);
+            if peer_id == orchestrator_peer_id {
+                schedule_bootstrap_redial(*redial_attempt, redial_sleep);
+            }
+        }
+        _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bootstrap_redial_delay_is_exponential_and_capped() {
+        assert_eq!(bootstrap_redial_delay(0), Duration::from_secs(1));
+        assert_eq!(bootstrap_redial_delay(1), Duration::from_secs(2));
+        assert_eq!(bootstrap_redial_delay(2), Duration::from_secs(4));
+        assert_eq!(bootstrap_redial_delay(10), Duration::from_secs(60));
+        assert_eq!(bootstrap_redial_delay(100), Duration::from_secs(60));
     }
 }
