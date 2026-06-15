@@ -35,10 +35,10 @@ pub struct Bid {
 }
 
 /// Returns true when this node should participate in the bidding round.
+///
+/// Parent tasks may advertise more qubits than a single node can execute; the orchestrator
+/// slices branches down to each node's `max_qubit_capability` before dispatch.
 pub fn should_bid_on(announcement: &TaskAnnouncement, config: &NodeConfig) -> bool {
-    if announcement.global_qubit_count > config.max_qubits as u32 {
-        return false;
-    }
     if (config.max_qubits as u32) < NETWORK_MIN_QUBITS {
         return false;
     }
@@ -155,6 +155,52 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::NodeConfig;
+    use crate::domain::p2p::TaskAnnouncement;
+    use ed25519_dalek::SigningKey;
+
+    fn test_config(max_qubits: usize) -> NodeConfig {
+        NodeConfig {
+            peer_id: "test".to_string(),
+            core_url: String::new(),
+            max_qubits,
+            compute_timeout_secs: 300,
+            signing_key: SigningKey::from_bytes(&[0u8; 32]),
+            bootstrap_peers: vec![],
+            p2p_listen_port: 0,
+            http_port: 0,
+            database_url: String::new(),
+            stake_amount: BigInt::from(0),
+            orchestrator_peer_id: None,
+            orchestrator_public_key: None,
+        }
+    }
+
+    #[test]
+    fn should_bid_when_parent_qubits_exceed_node_cap() {
+        let announcement = TaskAnnouncement {
+            task_id: "task-30".to_string(),
+            global_qubit_count: 30,
+            security_level: "low".to_string(),
+            required_features: FEATURE_STANDARD_GATES,
+            bid_difficulty: 0,
+            nonce: 1,
+        };
+        assert!(should_bid_on(&announcement, &test_config(28)));
+    }
+
+    #[test]
+    fn should_not_bid_when_features_unsupported() {
+        let announcement = TaskAnnouncement {
+            task_id: "task-30".to_string(),
+            global_qubit_count: 30,
+            security_level: "low".to_string(),
+            required_features: FEATURE_STANDARD_GATES | FEATURE_CUSTOM_UNITARY | (1 << 5),
+            bid_difficulty: 0,
+            nonce: 1,
+        };
+        assert!(!should_bid_on(&announcement, &test_config(28)));
+    }
 
     #[test]
     fn serialize_bid_payload_layout_matches_orchestrator() {

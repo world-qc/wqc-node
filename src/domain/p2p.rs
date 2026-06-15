@@ -26,7 +26,9 @@ pub struct SubTask {
     pub qubit_count: u32,
     pub original_qubit_count: u32,
     pub slice_id: String,
+    #[serde(default)]
     pub slice_assignments: Vec<SliceAssignment>,
+    #[serde(default)]
     pub circuit: Vec<Gate>,
     pub required_votes: u32,
 }
