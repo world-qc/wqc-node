@@ -9,6 +9,7 @@ use tokio::sync::Mutex;
 use crate::application::state::AppState;
 use crate::config::NodeConfig;
 use crate::domain::bid;
+use crate::domain::features;
 use crate::domain::p2p::TaskAnnouncement;
 use crate::transport::p2p::stream_io::write_outbound_stream;
 
@@ -32,16 +33,23 @@ impl BidClient {
         announcement: TaskAnnouncement,
         orchestrator_peer_id: PeerId,
     ) -> anyhow::Result<()> {
-        if !bid::should_bid_on(&announcement, &self.config) {
+        let supported_features = features::features_from_gates(&self.state.supported_gates);
+        if !bid::should_bid_on(&announcement, &self.config, supported_features) {
             tracing::debug!(
-                "[P2P Bid] Skipping task_id={} (capability/feature mismatch)",
-                announcement.task_id
+                "[P2P Bid] Skipping task_id={} (capability/feature mismatch, supported_features=0x{:x})",
+                announcement.task_id,
+                supported_features
             );
             return Ok(());
         }
 
         let current_load = self.state.pending_tasks.load(Ordering::Relaxed) as u32;
-        let signed_bid = bid::build_signed_bid(&announcement, &self.config, current_load)
+        let signed_bid = bid::build_signed_bid(
+            &announcement,
+            &self.config,
+            current_load,
+            supported_features,
+        )
             .ok_or_else(|| anyhow::anyhow!("failed to mine lottery proof within time window"))?;
 
         let payload = serde_json::to_vec(&signed_bid)?;

@@ -5,15 +5,10 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::config::NodeConfig;
+use crate::domain::features::{self, FEATURE_STANDARD_GATES};
 use crate::domain::p2p::TaskAnnouncement;
 
 pub const PROTOCOL_BID: &str = "/wqc/tensor-net/1.0.0";
-
-pub const FEATURE_STANDARD_GATES: u32 = 1 << 0;
-pub const FEATURE_CUSTOM_UNITARY: u32 = 1 << 1;
-
-/// Node feature bitmask advertised to the orchestrator.
-pub const NODE_FEATURES: u32 = FEATURE_STANDARD_GATES | FEATURE_CUSTOM_UNITARY;
 
 const NETWORK_MIN_QUBITS: u32 = 10;
 const LOTTERY_TIME_WINDOW_SECS: i64 = 10;
@@ -32,17 +27,26 @@ pub struct Bid {
     pub lottery_proof: Vec<u8>,
     #[serde(serialize_with = "serialize_stake_as_string")]
     pub stake_amount: BigInt,
+    pub supported_features: u32,
 }
 
 /// Returns true when this node should participate in the bidding round.
 ///
+/// `supported_features` is derived from wqc-core `GET /gates` at node startup.
 /// Parent tasks may advertise more qubits than a single node can execute; the orchestrator
 /// slices branches down to each node's `max_qubit_capability` before dispatch.
-pub fn should_bid_on(announcement: &TaskAnnouncement, config: &NodeConfig) -> bool {
+pub fn should_bid_on(
+    announcement: &TaskAnnouncement,
+    config: &NodeConfig,
+    supported_features: u32,
+) -> bool {
     if (config.max_qubits as u32) < NETWORK_MIN_QUBITS {
         return false;
     }
-    (announcement.required_features & NODE_FEATURES) == announcement.required_features
+    if supported_features == 0 {
+        return false;
+    }
+    features::supports_required_features(supported_features, announcement.required_features)
 }
 
 /// Builds a signed bid for the orchestrator bid stream.
@@ -50,6 +54,7 @@ pub fn build_signed_bid(
     announcement: &TaskAnnouncement,
     config: &NodeConfig,
     current_load: u32,
+    supported_features: u32,
 ) -> Option<Bid> {
     let (timestamp, lottery_attempt, lottery_proof) =
         mine_lottery(&config.peer_id, announcement.nonce, announcement.bid_difficulty)?;
@@ -64,6 +69,7 @@ pub fn build_signed_bid(
         signature: Vec::new(),
         lottery_proof,
         stake_amount: config.stake_amount.clone(),
+        supported_features,
     };
 
     let payload = serialize_bid_payload(&bid);
@@ -87,6 +93,7 @@ pub fn serialize_bid_payload(bid: &Bid) -> Vec<u8> {
     payload.extend_from_slice(&bid.timestamp.to_be_bytes());
     payload.extend_from_slice(&bid.lottery_attempt.to_be_bytes());
     payload.extend_from_slice(&bid.lottery_proof);
+    payload.extend_from_slice(&bid.supported_features.to_be_bytes());
     payload
 }
 
@@ -156,6 +163,7 @@ where
 mod tests {
     use super::*;
     use crate::config::NodeConfig;
+    use crate::domain::features::{FEATURE_CUSTOM_UNITARY, FEATURE_STANDARD_GATES};
     use crate::domain::p2p::TaskAnnouncement;
     use ed25519_dalek::SigningKey;
 
@@ -186,7 +194,11 @@ mod tests {
             bid_difficulty: 0,
             nonce: 1,
         };
-        assert!(should_bid_on(&announcement, &test_config(28)));
+        assert!(should_bid_on(
+            &announcement,
+            &test_config(28),
+            FEATURE_STANDARD_GATES
+        ));
     }
 
     #[test]
@@ -199,11 +211,29 @@ mod tests {
             bid_difficulty: 0,
             nonce: 1,
         };
-        assert!(!should_bid_on(&announcement, &test_config(28)));
+        assert!(!should_bid_on(
+            &announcement,
+            &test_config(28),
+            FEATURE_STANDARD_GATES
+        ));
+    }
+
+    #[test]
+    fn should_not_bid_when_core_reports_no_features() {
+        let announcement = TaskAnnouncement {
+            task_id: "task-30".to_string(),
+            global_qubit_count: 30,
+            security_level: "low".to_string(),
+            required_features: FEATURE_STANDARD_GATES,
+            bid_difficulty: 0,
+            nonce: 1,
+        };
+        assert!(!should_bid_on(&announcement, &test_config(28), 0));
     }
 
     #[test]
     fn serialize_bid_payload_layout_matches_orchestrator() {
+        let supported = FEATURE_STANDARD_GATES | FEATURE_CUSTOM_UNITARY;
         let bid = Bid {
             task_id: "task-a".to_string(),
             node_id: "node-b".to_string(),
@@ -214,6 +244,7 @@ mod tests {
             signature: Vec::new(),
             lottery_proof: vec![0xAA, 0xBB],
             stake_amount: BigInt::from(50_000),
+            supported_features: supported,
         };
 
         let payload = serialize_bid_payload(&bid);
@@ -225,6 +256,7 @@ mod tests {
         expected.extend_from_slice(&1_717_776_000i64.to_be_bytes());
         expected.extend_from_slice(&7u64.to_be_bytes());
         expected.extend_from_slice(&[0xAA, 0xBB]);
+        expected.extend_from_slice(&supported.to_be_bytes());
         assert_eq!(payload, expected);
     }
 
