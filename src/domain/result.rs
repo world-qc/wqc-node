@@ -1,4 +1,4 @@
-use crate::domain::models::{ComplexResult, Proof};
+use crate::domain::models::{ComplexResult, Proof, WorkReport};
 
 pub const PROTOCOL_RESULT: &str = "/wqc/tensor-result/1.0.0";
 
@@ -8,6 +8,7 @@ pub struct ResultMessage {
     pub node_id: String,
     pub complex_result: ComplexResult,
     pub proof: Proof,
+    pub work_report: Option<WorkReport>,
     pub error: Option<String>,
 }
 
@@ -29,17 +30,22 @@ impl ResultMessage {
     pub fn to_json_bytes(&self) -> anyhow::Result<Vec<u8>> {
         let complex_json = format_go_complex_result_json(&self.complex_result);
         let proof_json = serde_json::to_string(&self.proof)?;
+        let work_report_json = match &self.work_report {
+            Some(report) => serde_json::to_string(report)?,
+            None => "null".to_string(),
+        };
         let error_json = match &self.error {
             Some(err) => serde_json::to_string(err)?,
             None => "null".to_string(),
         };
 
         let body = format!(
-            r#"{{"sub_task_id":{},"node_id":{},"complex_result":{},"proof":{},"error":{}}}"#,
+            r#"{{"sub_task_id":{},"node_id":{},"complex_result":{},"proof":{},"work_report":{},"error":{}}}"#,
             serde_json::to_string(&self.sub_task_id)?,
             serde_json::to_string(&self.node_id)?,
             complex_json,
             proof_json,
+            work_report_json,
             error_json,
         );
         Ok(body.into_bytes())

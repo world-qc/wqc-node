@@ -12,6 +12,7 @@ struct TaskResultData {
     complex_result: ComplexResult,
     proof: crate::domain::models::Proof,
     execution_time_ms: u64,
+    work_report: Option<crate::domain::models::WorkReport>,
 }
 
 pub async fn start_worker(
@@ -44,6 +45,7 @@ async fn process_task(
             proof: Some(data.proof),
             error: None,
             execution_time_ms: Some(data.execution_time_ms),
+            work_report: data.work_report,
         },
         Err(e) => {
             tracing::error!("Task {} failed: {}", task_id, e);
@@ -54,6 +56,7 @@ async fn process_task(
                 proof: None,
                 error: Some(e.to_string()),
                 execution_time_ms: None,
+                work_report: None,
             }
         }
     };
@@ -83,5 +86,6 @@ async fn execute_compute(
         complex_result: res.complex_result,
         proof: res.proof,
         execution_time_ms,
+        work_report: res.work_report,
     })
 }

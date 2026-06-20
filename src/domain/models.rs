@@ -47,12 +47,23 @@ pub struct Proof {
     pub stark_proof_b64: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkReport {
+    pub trace_rows: u64,
+    pub gate_count: u32,
+    pub compute_wall_ms: u64,
+    pub prove_wall_ms: u64,
+    pub proof_bytes: u64,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ComputeResponse {
     pub task_id: String,
     pub status: String,
     pub complex_result: ComplexResult,
     pub proof: Proof,
+    #[serde(default)]
+    pub work_report: Option<WorkReport>,
 }
 
 #[derive(Debug, Serialize)]
@@ -63,6 +74,7 @@ pub struct TaskResultPayload {
     pub proof: Option<Proof>,
     pub error: Option<String>,
     pub execution_time_ms: Option<u64>,
+    pub work_report: Option<WorkReport>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

@@ -70,6 +70,7 @@ impl ResultSink for P2pResultSink {
             node_id: self.state.config.peer_id.clone(),
             complex_result,
             proof,
+            work_report: payload.work_report,
             error: None,
         };
 
