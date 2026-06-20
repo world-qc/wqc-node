@@ -5,7 +5,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::config::NodeConfig;
-use crate::domain::features::{self, FEATURE_STANDARD_GATES};
+use crate::domain::features::{self};
 use crate::domain::p2p::TaskAnnouncement;
 
 pub const PROTOCOL_BID: &str = "/wqc/tensor-net/1.0.0";
