@@ -67,10 +67,9 @@ impl NodeConfig {
         let database_url =
             env::var("WQC_DATABASE_URL").unwrap_or_else(|_| "sqlite:wqc-node.db".to_string());
 
-        let stake_amount = env::var("WQC_NODE_STAKE_AMOUNT")
-            .unwrap_or_else(|_| "50000".to_string())
-            .parse::<BigInt>()
-            .context("WQC_NODE_STAKE_AMOUNT must be a valid integer")?;
+        let stake_wqc = env::var("WQC_NODE_STAKE_WQC").unwrap_or_else(|_| "0.05".to_string());
+        let stake_amount = crate::domain::token::parse_wqc_to_planck(&stake_wqc)
+            .with_context(|| format!("WQC_NODE_STAKE_WQC must be a valid WQC amount, got {stake_wqc:?}"))?;
 
         let orchestrator_peer_id = parse_orchestrator_peer_id(&bootstrap_peers);
 
@@ -88,6 +87,11 @@ impl NodeConfig {
             compute_timeout_secs
         );
         tracing::info!("Node libp2p PeerID: {}", peer_id);
+        tracing::info!(
+            "Node bid stake: {} WQC ({} pWQC)",
+            stake_wqc,
+            stake_amount
+        );
         if let Some(peer) = orchestrator_peer_id {
             tracing::info!("Orchestrator libp2p PeerID: {}", peer);
         }
