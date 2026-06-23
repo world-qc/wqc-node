@@ -182,14 +182,21 @@ async fn run(config: NodeConfig, state: Arc<AppState>) -> anyhow::Result<()> {
     let bootstrap_addrs = parse_bootstrap_addrs(&config.bootstrap_peers);
     dial_bootstrap_peers(&mut swarm, &bootstrap_addrs, "Dialing");
 
+    let mut redial_attempt: u32 = 0;
+    let mut redial_sleep: Option<Pin<Box<Sleep>>> = None;
+    if !swarm
+        .connected_peers()
+        .any(|peer_id| *peer_id == orchestrator_peer_id)
+    {
+        // Orchestrator may still be starting (e.g. air rebuild). Retry until connected.
+        schedule_bootstrap_redial(redial_attempt, &mut redial_sleep);
+    }
+
     tracing::info!(
         "P2P host started (peer_id={}, listen_port={})",
         local_peer_id,
         config.p2p_listen_port
     );
-
-    let mut redial_attempt: u32 = 0;
-    let mut redial_sleep: Option<Pin<Box<Sleep>>> = None;
 
     loop {
         tokio::select! {
@@ -317,6 +324,15 @@ fn handle_swarm_event(
         SwarmEvent::ConnectionClosed { peer_id, .. } => {
             tracing::info!("[P2P] Disconnected from peer {}", peer_id);
             if peer_id == orchestrator_peer_id {
+                schedule_bootstrap_redial(*redial_attempt, redial_sleep);
+            }
+        }
+        SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
+            if peer_id == Some(orchestrator_peer_id) {
+                tracing::warn!(
+                    "[P2P] Outgoing connection to orchestrator failed: {}",
+                    error
+                );
                 schedule_bootstrap_redial(*redial_attempt, redial_sleep);
             }
         }
