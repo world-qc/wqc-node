@@ -63,6 +63,24 @@ impl Storage {
         Ok(())
     }
 
+    pub fn load_task(
+        &self,
+        orchestrator_pubkey: &str,
+        task_id: &str,
+    ) -> anyhow::Result<Option<ComputeTask>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT payload FROM tasks WHERE orchestrator_pubkey = ?1 AND task_id = ?2",
+        )?;
+
+        let mut rows = stmt.query(params![orchestrator_pubkey, task_id])?;
+        if let Some(row) = rows.next()? {
+            let payload: String = row.get(0)?;
+            return Ok(Some(serde_json::from_str(&payload)?));
+        }
+        Ok(None)
+    }
+
     pub fn update_status(
         &self,
         orchestrator_pubkey: &str,
@@ -199,6 +217,28 @@ mod tests {
             },
             orchestrator_pubkey: "orch-pubkey".to_string(),
         }
+    }
+
+    #[test]
+    fn load_task_returns_none_for_missing_row() {
+        let storage = Storage::new(":memory:").unwrap();
+        assert!(storage
+            .load_task("orch-pubkey", "missing")
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn load_task_round_trip() {
+        let storage = Storage::new(":memory:").unwrap();
+        let task = sample_task("sub-1");
+        storage.save_task(&task).unwrap();
+
+        let loaded = storage
+            .load_task("orch-pubkey", "sub-1")
+            .unwrap()
+            .expect("task row");
+        assert_eq!(loaded.request.task_id, "sub-1");
     }
 
     #[test]
