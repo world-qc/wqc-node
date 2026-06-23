@@ -69,7 +69,7 @@ Core must expose `GET /gates`, `GET /sysinfo`, and `POST /compute`.
 
 1. **Announce** — Gossip or `/wqc/task-announce/1.0.0` delivers `TaskAnnouncement`.
 2. **Bid** — If `required_features` and qubit caps match, mine lottery proof and send signed `Bid` on `/wqc/tensor-net/1.0.0`.
-3. **Dispatch** — Orchestrator pushes `SubTask` on `/wqc/tensor-dispatch/1.0.0` (only from pinned orchestrator PeerID).
+3. **Dispatch** — Orchestrator pushes signed `SubTask` on `/wqc/tensor-dispatch/1.0.0` (pinned orchestrator PeerID + Ed25519 signature check).
 4. **Execute** — Validate circuit → persist SQLite → `POST /compute` to core.
 5. **Result** — Build P2P wire body → upsert `pending_results` → deliver on `/wqc/tensor-result/1.0.0` → delete row on ACK.
 6. **Retry** — Background loop re-sends any remaining `pending_results` rows.

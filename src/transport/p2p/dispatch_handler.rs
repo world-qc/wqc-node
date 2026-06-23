@@ -7,7 +7,7 @@ use libp2p_stream::IncomingStreams;
 use crate::application::accept_task;
 use crate::application::state::AppState;
 use crate::config::NodeConfig;
-use crate::domain::p2p::TaskDispatchMessage;
+use crate::domain::p2p::{verify_dispatch_signature, TaskDispatchMessage};
 
 pub fn spawn_dispatch_handler(
     mut streams: IncomingStreams,
@@ -52,6 +52,13 @@ async fn handle_dispatch_stream(
         .orchestrator_public_key
         .as_deref()
         .ok_or_else(|| anyhow::anyhow!("WQC_ORCHESTRATOR_PUBLIC_KEY is required for P2P dispatch"))?;
+
+    verify_dispatch_signature(
+        &message.sub_task,
+        &message.signature,
+        orchestrator_pubkey,
+    )
+    .map_err(|e| anyhow::anyhow!("dispatch rejected: {e}"))?;
 
     let request = message
         .sub_task

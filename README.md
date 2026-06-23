@@ -131,9 +131,10 @@ Task ingress and results use **P2P only**—there is no `/submit` or webhook end
 ## Security Model
 
 1. **Bootstrap trust**: The node dials `WQC_ORCHESTRATOR_BOOTSTRAP` and only accepts announce/dispatch streams from that orchestrator's PeerID.
-2. **Bid authenticity**: Each bid is signed with `WQC_NODE_PRIVATE_KEY` and includes a lottery proof for `bid_difficulty`.
-3. **Capability gating**: Gates from `wqc-core` `GET /gates` map to `supported_features`; the node skips announcements it cannot execute.
-4. **Trapdoor audits**: The orchestrator may inject golden sub-tasks; failures can lead to a ban on the orchestrator side.
+2. **Dispatch authenticity**: Each `SubTask` carries an orchestrator Ed25519 signature verified against `WQC_ORCHESTRATOR_PUBLIC_KEY`.
+3. **Bid authenticity**: Each bid is signed with `WQC_NODE_PRIVATE_KEY` and includes a lottery proof for `bid_difficulty`.
+4. **Capability gating**: Gates from `wqc-core` `GET /gates` map to `supported_features`; the node skips announcements it cannot execute.
+5. **Trapdoor audits**: The orchestrator may inject golden sub-tasks; failures can lead to a ban on the orchestrator side.
 
 ## Development Roadmap
 
