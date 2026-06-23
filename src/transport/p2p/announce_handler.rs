@@ -7,7 +7,7 @@ use tokio::sync::Mutex;
 
 use crate::application::state::AppState;
 use crate::config::NodeConfig;
-use crate::domain::p2p::TaskAnnouncement;
+use crate::domain::p2p::parse_signed_announcement;
 use crate::transport::p2p::bid_client::BidClient;
 
 pub fn spawn_announce_handler(
@@ -52,7 +52,13 @@ async fn handle_announce_stream(
     let mut payload = Vec::new();
     stream.read_to_end(&mut payload).await?;
 
-    let announcement: TaskAnnouncement = serde_json::from_slice(&payload)?;
+    let orchestrator_pubkey = config
+        .orchestrator_public_key
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("WQC_ORCHESTRATOR_PUBLIC_KEY is required for P2P announce"))?;
+
+    let announcement = parse_signed_announcement(&payload, orchestrator_pubkey)
+        .map_err(|e| anyhow::anyhow!("announcement rejected: {e}"))?;
     tracing::info!(
         "[P2P Announce] TaskAnnouncement task_id={} qubits={} difficulty={}",
         announcement.task_id,

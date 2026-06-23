@@ -14,7 +14,7 @@ use tokio::time::Sleep;
 use crate::application::state::AppState;
 use crate::config::{libp2p_keypair_from_signing_key, NodeConfig};
 use crate::domain::bid;
-use crate::domain::p2p::{TaskAnnouncement, ANNOUNCEMENT_TOPIC, PROTOCOL_ANNOUNCE, PROTOCOL_DISPATCH};
+use crate::domain::p2p::{parse_signed_announcement, ANNOUNCEMENT_TOPIC, PROTOCOL_ANNOUNCE, PROTOCOL_DISPATCH};
 use crate::domain::result::PROTOCOL_RESULT;
 use crate::transport::p2p::announce_handler::spawn_announce_handler;
 use crate::transport::p2p::bid_client::{spawn_incoming_stream_sink, BidClient};
@@ -257,7 +257,15 @@ fn handle_swarm_event(
         SwarmEvent::Behaviour(NodeBehaviourEvent::Gossipsub(
             gossipsub::Event::Message { message, .. },
         )) => {
-            match serde_json::from_slice::<TaskAnnouncement>(&message.data) {
+            let Some(orchestrator_pubkey) = config.orchestrator_public_key.as_deref() else {
+                tracing::warn!(
+                    "[P2P Gossip] Ignoring announcement on {}: WQC_ORCHESTRATOR_PUBLIC_KEY is not set",
+                    message.topic
+                );
+                return;
+            };
+
+            match parse_signed_announcement(&message.data, orchestrator_pubkey) {
                 Ok(announcement) => {
                     tracing::info!(
                         "[P2P Gossip] TaskAnnouncement task_id={} qubits={} difficulty={}",

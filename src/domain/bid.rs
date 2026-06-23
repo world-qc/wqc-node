@@ -189,9 +189,9 @@ mod tests {
         let announcement = TaskAnnouncement {
             task_id: "task-30".to_string(),
             global_qubit_count: 30,
-            security_level: "low".to_string(),
             required_features: FEATURE_STANDARD_GATES,
             bid_difficulty: 0,
+            required_votes: 1,
             nonce: 1,
         };
         assert!(should_bid_on(
@@ -206,9 +206,9 @@ mod tests {
         let announcement = TaskAnnouncement {
             task_id: "task-30".to_string(),
             global_qubit_count: 30,
-            security_level: "low".to_string(),
             required_features: FEATURE_STANDARD_GATES | FEATURE_CUSTOM_UNITARY | (1 << 5),
             bid_difficulty: 0,
+            required_votes: 1,
             nonce: 1,
         };
         assert!(!should_bid_on(
@@ -223,9 +223,9 @@ mod tests {
         let announcement = TaskAnnouncement {
             task_id: "task-30".to_string(),
             global_qubit_count: 30,
-            security_level: "low".to_string(),
             required_features: FEATURE_STANDARD_GATES,
             bid_difficulty: 0,
+            required_votes: 1,
             nonce: 1,
         };
         assert!(!should_bid_on(&announcement, &test_config(28), 0));
