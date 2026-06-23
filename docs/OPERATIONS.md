@@ -51,6 +51,7 @@ Core must expose `GET /gates`, `GET /sysinfo`, and `POST /compute`.
 | `WQC_DATABASE_URL` | `sqlite:wqc-node.db` | Relative path is under the process working directory. |
 | `WQC_P2P_LISTEN_PORT` | `4002` | Bind `0.0.0.0` on TCP and QUIC. |
 | `WQC_HTTP_PORT` | `8080` | Admin API only. |
+| `WQC_RESULT_RETRY_INTERVAL_SECS` | `5` | Interval for background P2P result outbox retries. |
 | `RUST_LOG` | — | e.g. `info` or `wqc_node=debug` |
 
 ## Lifecycle
@@ -61,7 +62,8 @@ Core must expose `GET /gates`, `GET /sysinfo`, and `POST /compute`.
 2. Open SQLite; re-queue any `pending` tasks.
 3. Sync supported gates from `wqc-core` `GET /gates`.
 4. Start libp2p host: dial bootstrap, subscribe to gossip, accept stream protocols.
-5. Start single worker loop and admin HTTP server.
+5. Start result outbox retry loop (`WQC_RESULT_RETRY_INTERVAL_SECS`, default 5s).
+6. Start single worker loop and admin HTTP server.
 
 ### Task flow
 
@@ -69,11 +71,17 @@ Core must expose `GET /gates`, `GET /sysinfo`, and `POST /compute`.
 2. **Bid** — If `required_features` and qubit caps match, mine lottery proof and send signed `Bid` on `/wqc/tensor-net/1.0.0`.
 3. **Dispatch** — Orchestrator pushes `SubTask` on `/wqc/tensor-dispatch/1.0.0` (only from pinned orchestrator PeerID).
 4. **Execute** — Validate circuit → persist SQLite → `POST /compute` to core.
-5. **Result** — Send JSON on `/wqc/tensor-result/1.0.0` (success with proof, or failure with `error` only).
+5. **Result** — Build P2P wire body → upsert `pending_results` → deliver on `/wqc/tensor-result/1.0.0` → delete row on ACK.
+6. **Retry** — Background loop re-sends any remaining `pending_results` rows.
 
 ### Crash recovery
 
-Tasks saved as `pending` in SQLite are re-enqueued on restart. Completed/failed rows are updated but not pruned automatically.
+| State | On restart |
+| :--- | :--- |
+| `tasks.status = pending` | Re-enqueued for compute |
+| `pending_results` row present | Retry loop delivers when P2P is ready (no re-compute) |
+
+Completed/failed `tasks` rows are not pruned automatically.
 
 ## Docker compose (devnet)
 
@@ -123,7 +131,7 @@ The node only declares stake in bids. Balance, rewards, and burns are handled by
 | `failed to mine lottery proof within time window` | `bid_difficulty` too high for 10s window |
 | `wqc-core returned error status` | Core down, timeout (`WQC_COMPUTE_TIMEOUT_SECS`), or OOM on large circuits |
 | Pending tasks stuck after restart | Expected until core completes; check core logs |
-| Result delivery failed | P2P disconnect; **no automatic retry yet** (known gap) |
+| Result delivery failed | P2P disconnect; row kept in `pending_results` and **retried automatically** (check `GET /status` → `outbox_pending`) |
 
 ## Related docs
 

@@ -77,7 +77,7 @@ pub struct TaskResultPayload {
     pub work_report: Option<WorkReport>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ComplexResult {
     pub real: f64,
     pub imag: f64,
@@ -86,6 +86,7 @@ pub struct ComplexResult {
 #[derive(Debug, Serialize)]
 pub struct NodeStatus {
     pub pending_tasks: usize,
+    pub outbox_pending: usize,
     pub max_qubits: usize,
     pub system_memory_used_kb: u64,
     pub system_memory_total_kb: u64,

@@ -117,13 +117,14 @@ docker compose -f world-qc-docker/wqc/compose.yml up wqc-node-01
 | `WQC_P2P_LISTEN_PORT` | no | `4002` | TCP/QUIC listen port for libp2p. |
 | `WQC_HTTP_PORT` | no | `8080` | Admin API bind port. |
 | `WQC_DATABASE_URL` | no | `sqlite:wqc-node.db` | SQLite path (`sqlite:` prefix optional). |
+| `WQC_RESULT_RETRY_INTERVAL_SECS` | no | `5` | Background interval for retrying undelivered P2P results. |
 
 ## Admin HTTP API
 
 | Endpoint | Description |
 | :--- | :--- |
 | `GET /health` | `{"status":"UP"}` |
-| `GET /status` | Pending task count, `max_qubits`, core sysinfo, supported gates |
+| `GET /status` | Pending compute tasks, **outbox** pending results, `max_qubits`, core sysinfo, supported gates |
 
 Task ingress and results use **P2P only**—there is no `/submit` or webhook endpoint on the node.
 
@@ -142,7 +143,7 @@ Task ingress and results use **P2P only**—there is no `/submit` or webhook end
 - [x] SQLite pending-task recovery
 - [x] `WorkReport` for orchestrator Gas accounting
 - [x] `WQC_NODE_STAKE_WQC` → Planck stake on bids
-- [ ] P2P result outbox + retry on delivery failure
+- [x] P2P result outbox (SQLite `pending_results`) + background retry
 
 ### Phase 2 — Operations
 

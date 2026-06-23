@@ -30,9 +30,11 @@ fn default_gates() -> Vec<String> {
 }
 
 pub async fn collect_node_status(state: &AppState) -> NodeStatus {
+    let outbox_pending = state.storage.count_pending_results().unwrap_or(0);
     match state.core_client.get_system_info().await {
         Ok(data) => NodeStatus {
             pending_tasks: state.pending_tasks.load(Ordering::SeqCst),
+            outbox_pending,
             max_qubits: state.config.max_qubits,
             system_memory_used_kb: data.system_memory_used_kb,
             system_memory_total_kb: data.system_memory_total_kb,
@@ -43,6 +45,7 @@ pub async fn collect_node_status(state: &AppState) -> NodeStatus {
             tracing::error!("Failed to get core system info: {}.", e);
             NodeStatus {
                 pending_tasks: state.pending_tasks.load(Ordering::SeqCst),
+                outbox_pending,
                 max_qubits: state.config.max_qubits,
                 system_memory_used_kb: 0,
                 system_memory_total_kb: 0,

@@ -42,8 +42,9 @@ async fn main() -> anyhow::Result<()> {
     let storage = infra::storage::Storage::new(&config.database_url)?;
     let pending_from_db = storage.get_pending_tasks()?;
     let pending_count = pending_from_db.len();
+    let outbox_count = storage.count_pending_results().unwrap_or(0);
 
-    print_startup_banner(&config, pending_count);
+    print_startup_banner(&config, pending_count, outbox_count);
 
     let (tx, rx) = mpsc::channel(100);
 
@@ -72,6 +73,8 @@ async fn main() -> anyhow::Result<()> {
 
     p2p::host::spawn(config.clone(), shared_state.clone());
 
+    application::result_outbox::spawn_retry_loop(shared_state.clone());
+
     let app = Router::new()
         .route("/status", get(handlers::get_status))
         .route(
@@ -88,7 +91,7 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn print_startup_banner(config: &NodeConfig, recovered_task_count: usize) {
+fn print_startup_banner(config: &NodeConfig, recovered_task_count: usize, outbox_count: usize) {
     let mut sys = System::new_all();
     sys.refresh_specifics(RefreshKind::new().with_memory(MemoryRefreshKind::everything()));
     let total_gb = sys.total_memory() / 1024 / 1024 / 1024;
@@ -138,6 +141,14 @@ fn print_startup_banner(config: &NodeConfig, recovered_task_count: usize) {
         "Storage:".bold(),
         recovered_task_count
     );
+    if outbox_count > 0 {
+        println!(
+            "  {}  {:15} {} result(s) queued in outbox (will retry)",
+            "●".yellow(),
+            "Outbox:".bold(),
+            outbox_count
+        );
+    }
 
     println!();
     println!(
