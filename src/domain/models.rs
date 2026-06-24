@@ -24,6 +24,8 @@ pub struct ComputeRequest {
     pub slice_assignments: Vec<SliceAssignment>,
     pub circuit: Vec<Gate>,
     pub required_votes: Option<u32>,
+    #[serde(default)]
+    pub mps_max_bond_dim: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

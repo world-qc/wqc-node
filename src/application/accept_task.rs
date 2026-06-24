@@ -132,6 +132,7 @@ mod tests {
                     params: serde_json::json!([0]),
                 }],
                 required_votes: Some(2),
+                mps_max_bond_dim: None,
             },
             orchestrator_pubkey: "orch-pubkey".to_string(),
         }

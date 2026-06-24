@@ -214,6 +214,7 @@ mod tests {
                 slice_assignments: vec![],
                 circuit: vec![],
                 required_votes: Some(2),
+                mps_max_bond_dim: None,
             },
             orchestrator_pubkey: "orch-pubkey".to_string(),
         }

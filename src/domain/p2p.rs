@@ -40,6 +40,8 @@ pub struct SubTask {
     #[serde(default)]
     pub circuit: Vec<Gate>,
     pub required_votes: u32,
+    #[serde(default)]
+    pub mps_max_bond_dim: u32,
 }
 
 /// Mirrors orchestrator `bid.SerializeAnnouncementPayload` byte layout exactly.
@@ -105,6 +107,7 @@ pub fn serialize_dispatch_payload(sub_task: &SubTask) -> Result<Vec<u8>, String>
         .map_err(|e| format!("marshal circuit for dispatch signing: {e}"))?;
     payload.extend_from_slice(&(circuit_json.len() as u32).to_be_bytes());
     payload.extend_from_slice(&circuit_json);
+    payload.extend_from_slice(&sub_task.mps_max_bond_dim.to_be_bytes());
 
     Ok(payload)
 }
@@ -164,6 +167,11 @@ impl SubTask {
             slice_assignments: self.slice_assignments,
             circuit: self.circuit,
             required_votes: Some(self.required_votes),
+            mps_max_bond_dim: if self.mps_max_bond_dim > 0 {
+                Some(self.mps_max_bond_dim as usize)
+            } else {
+                None
+            },
         }
     }
 }
@@ -213,6 +221,7 @@ mod tests {
                 params: serde_json::json!([0]),
             }],
             required_votes: 2,
+            mps_max_bond_dim: 128,
         };
 
         let payload = serialize_dispatch_payload(&sub_task).expect("serialize dispatch payload");
@@ -230,6 +239,7 @@ mod tests {
         let circuit_json = br#"[{"type":"H","params":[0]}]"#;
         expected.extend_from_slice(&(circuit_json.len() as u32).to_be_bytes());
         expected.extend_from_slice(circuit_json);
+        expected.extend_from_slice(&128u32.to_be_bytes());
         assert_eq!(payload, expected);
     }
 }
