@@ -4,8 +4,10 @@ use anyhow::Context;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use ed25519_dalek::SigningKey;
 use libp2p::identity::Keypair;
-use libp2p::{multiaddr::Protocol, Multiaddr, PeerId};
+use libp2p::PeerId;
 use num_bigint::BigInt;
+
+use crate::infra::orchestrator::OrchestratorBootstrap;
 
 #[derive(Clone)]
 pub struct NodeConfig {
@@ -15,6 +17,10 @@ pub struct NodeConfig {
     pub max_qubits: usize,
     pub compute_timeout_secs: u64,
     pub signing_key: SigningKey,
+    /// Comma-separated bootstrap endpoint URLs from env (full path, failover order).
+    pub bootstrap_urls: Vec<String>,
+    /// Bootstrap URL that successfully returned P2P discovery info.
+    pub bootstrap_source_url: Option<String>,
     pub bootstrap_peers: Vec<String>,
     pub p2p_listen_port: u16,
     pub http_port: u16,
@@ -43,15 +49,15 @@ impl NodeConfig {
             .to_peer_id()
             .to_string();
 
-        let bootstrap_peers: Vec<_> = env::var("WQC_ORCHESTRATOR_BOOTSTRAP")
-            .context("WQC_ORCHESTRATOR_BOOTSTRAP is required (comma-separated libp2p multiaddrs)")?
+        let bootstrap_urls: Vec<_> = env::var("WQC_BOOTSTRAP_URLS")
+            .context("WQC_BOOTSTRAP_URLS is required (comma-separated full bootstrap HTTP(S) URLs)")?
             .split(',')
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect();
 
-        if bootstrap_peers.is_empty() {
-            anyhow::bail!("WQC_ORCHESTRATOR_BOOTSTRAP must include at least one multiaddr");
+        if bootstrap_urls.is_empty() {
+            anyhow::bail!("WQC_BOOTSTRAP_URLS must include at least one URL");
         }
 
         let p2p_listen_port = env::var("WQC_P2P_LISTEN_PORT")
@@ -71,16 +77,6 @@ impl NodeConfig {
         let stake_amount = crate::domain::token::parse_wqc_to_planck(&stake_wqc)
             .with_context(|| format!("WQC_NODE_STAKE_WQC must be a valid WQC amount, got {stake_wqc:?}"))?;
 
-        let orchestrator_peer_id = parse_orchestrator_peer_id(&bootstrap_peers);
-
-        let orchestrator_public_key = Some(
-            env::var("WQC_ORCHESTRATOR_PUBLIC_KEY")
-                .context("WQC_ORCHESTRATOR_PUBLIC_KEY is required (base64 Ed25519 public key)")?
-                .trim()
-                .to_string(),
-        )
-        .filter(|s| !s.is_empty());
-
         tracing::info!(
             "Node Config Loaded: Max Qubits = {}, Compute Timeout = {}s",
             max_qubits,
@@ -92,9 +88,6 @@ impl NodeConfig {
             stake_wqc,
             stake_amount
         );
-        if let Some(peer) = orchestrator_peer_id {
-            tracing::info!("Orchestrator libp2p PeerID: {}", peer);
-        }
 
         Ok(Self {
             peer_id,
@@ -102,29 +95,32 @@ impl NodeConfig {
             max_qubits,
             compute_timeout_secs,
             signing_key,
-            bootstrap_peers,
+            bootstrap_urls,
+            bootstrap_source_url: None,
+            bootstrap_peers: Vec::new(),
             p2p_listen_port,
             http_port,
             database_url,
             stake_amount,
-            orchestrator_peer_id,
-            orchestrator_public_key,
+            orchestrator_peer_id: None,
+            orchestrator_public_key: None,
         })
     }
-}
 
-pub fn parse_orchestrator_peer_id(bootstrap_peers: &[String]) -> Option<PeerId> {
-    for raw in bootstrap_peers {
-        let Ok(addr) = raw.parse::<Multiaddr>() else {
-            continue;
-        };
-        for protocol in addr.iter() {
-            if let Protocol::P2p(peer_id) = protocol {
-                return Some(peer_id);
-            }
+    pub fn apply_orchestrator_bootstrap(
+        &mut self,
+        bootstrap: OrchestratorBootstrap,
+    ) -> anyhow::Result<()> {
+        if bootstrap.multiaddrs.is_empty() {
+            anyhow::bail!("orchestrator bootstrap returned no multiaddrs");
         }
+        self.bootstrap_source_url = Some(bootstrap.source_url);
+        self.orchestrator_peer_id = Some(bootstrap.peer_id);
+        self.orchestrator_public_key = Some(bootstrap.public_key_b64);
+        self.bootstrap_peers = bootstrap.multiaddrs;
+        tracing::info!("Orchestrator libp2p PeerID: {}", bootstrap.peer_id);
+        Ok(())
     }
-    None
 }
 
 fn load_signing_key_from_env() -> anyhow::Result<SigningKey> {

@@ -43,7 +43,7 @@ pub async fn send_result_wire(state: Arc<AppState>, wire_body: &[u8]) -> anyhow:
     let orchestrator_peer_id = state
         .config
         .orchestrator_peer_id
-        .ok_or_else(|| anyhow::anyhow!("WQC_ORCHESTRATOR_BOOTSTRAP must include /p2p/<peer-id>"))?;
+        .ok_or_else(|| anyhow::anyhow!("orchestrator peer id not configured"))?;
 
     let control = state
         .p2p_stream_control

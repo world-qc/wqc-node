@@ -21,18 +21,16 @@ Each node process executes **one sub-task at a time**. Throughput scales by addi
 - Used for: libp2p PeerID, bid Ed25519 signatures.
 - **One key per node** in multi-node deployments.
 
-### `WQC_ORCHESTRATOR_BOOTSTRAP`
+### `WQC_BOOTSTRAP_URLS`
 
-- Comma-separated [libp2p multiaddr](https://github.com/multiformats/multiaddr) list.
-- Must include `/p2p/<orchestrator-peer-id>` so the node can pin the orchestrator PeerID.
-- Example: `/ip4/10.20.3.11/tcp/4001/p2p/12D3KooWDmYmHPsTGDi9QNvEDURikkhWoj2wWEnSjwvQeDXmhak3`
-- On disconnect, the node redials with exponential backoff (1s → 60s cap).
+- Comma-separated **full** bootstrap endpoint URLs (path included).
+- At startup the node `GET`s each URL in order until one succeeds; response fields `peer_id`, `public_key_b64`, and `multiaddrs` are kept in memory.
+- Use multiple URLs for **failover** (first success wins).
+- Example: `http://wqc-orchestrator-01:9000/api/v1/p2p/bootstrap`
+- Backup example: `http://primary:9000/api/v1/p2p/bootstrap,http://backup:9000/api/v1/p2p/bootstrap`
+- On P2P disconnect, the node redials the resolved multiaddrs with exponential backoff (1s → 60s cap).
 
-### `WQC_ORCHESTRATOR_PUBLIC_KEY`
-
-- Base64 Ed25519 **public** key of the orchestrator (32-byte raw key, not PEM).
-- Stored with each `ComputeTask` in SQLite as the task owner identity.
-- Must match the orchestrator instance you bootstrap to.
+Orchestrator must expose dialable libp2p addresses. In Docker set `WQC_P2P_ADVERTISE_ADDRS` on the orchestrator (listen bind `0.0.0.0` is not dialable from other containers).
 
 ### `WQC_CORE_URL`
 
@@ -59,11 +57,12 @@ Core must expose `GET /gates`, `GET /sysinfo`, and `POST /compute`.
 ### Startup
 
 1. Load env → derive libp2p PeerID from `WQC_NODE_PRIVATE_KEY`.
-2. Open SQLite; re-queue any `pending` tasks.
-3. Sync supported gates from `wqc-core` `GET /gates`.
-4. Start libp2p host: dial bootstrap, subscribe to gossip, accept stream protocols.
-5. Start result outbox retry loop (`WQC_RESULT_RETRY_INTERVAL_SECS`, default 5s).
-6. Start single worker loop and admin HTTP server.
+2. `GET` first reachable URL from `WQC_BOOTSTRAP_URLS` → cache peer id, pubkey, multiaddrs.
+3. Open SQLite; re-queue any `pending` tasks.
+4. Sync supported gates from `wqc-core` `GET /gates`.
+5. Start libp2p host: dial bootstrap, subscribe to gossip, accept stream protocols.
+6. Start result outbox retry loop (`WQC_RESULT_RETRY_INTERVAL_SECS`, default 5s).
+7. Start single worker loop and admin HTTP server.
 
 ### Task flow
 
@@ -88,7 +87,7 @@ Completed/failed `tasks` rows are not pruned automatically.
 Reference: `world-qc-docker/wqc/compose.yml`
 
 - Five nodes (`wqc-node-01` … `05`), each with a unique `WQC_NODE_PRIVATE_KEY` and SQLite file.
-- Shared orchestrator bootstrap on `10.20.3.11:4001`.
+- Shared bootstrap URL `http://wqc-orchestrator-01:9000/api/v1/p2p/bootstrap`; orchestrator advertises P2P on `10.20.3.11:4001`.
 - `WQC_NODE_STAKE_WQC=0.05` on all nodes.
 
 Rebuild after code changes:
@@ -124,8 +123,8 @@ The node only declares stake in bids. Balance, rewards, and burns are handled by
 
 | Symptom | Likely cause |
 | :--- | :--- |
-| `WQC_ORCHESTRATOR_BOOTSTRAP is required` | Env not set in container/shell |
-| `WQC_ORCHESTRATOR_PUBLIC_KEY is required` | Missing orchestrator pubkey |
+| `WQC_BOOTSTRAP_URLS is required` | Env not set in container/shell |
+| `failed to resolve orchestrator P2P bootstrap` | Orchestrator HTTP down, or missing `WQC_P2P_ADVERTISE_ADDRS` |
 | Node never bids | `supported_features` mismatch, `WQC_MAX_QUBITS` &lt; 10, or announcement qubits above capability |
 | `[P2P Dispatch] Rejected subtask from unauthorized peer` | Dispatch from non-bootstrap PeerID |
 | `failed to mine lottery proof within time window` | `bid_difficulty` too high for 10s window |

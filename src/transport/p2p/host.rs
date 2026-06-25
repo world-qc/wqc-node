@@ -155,7 +155,7 @@ async fn run(config: NodeConfig, state: Arc<AppState>) -> anyhow::Result<()> {
 
     let orchestrator_peer_id = config
         .orchestrator_peer_id
-        .ok_or_else(|| anyhow::anyhow!("WQC_ORCHESTRATOR_BOOTSTRAP must include /p2p/<peer-id>"))?;
+        .ok_or_else(|| anyhow::anyhow!("orchestrator peer id not configured"))?;
 
     spawn_announce_handler(
         announce_incoming,
@@ -259,7 +259,7 @@ fn handle_swarm_event(
         )) => {
             let Some(orchestrator_pubkey) = config.orchestrator_public_key.as_deref() else {
                 tracing::warn!(
-                    "[P2P Gossip] Ignoring announcement on {}: WQC_ORCHESTRATOR_PUBLIC_KEY is not set",
+                    "[P2P Gossip] Ignoring announcement on {}: orchestrator public key not configured",
                     message.topic
                 );
                 return;

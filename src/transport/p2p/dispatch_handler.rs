@@ -51,7 +51,7 @@ async fn handle_dispatch_stream(
     let orchestrator_pubkey = config
         .orchestrator_public_key
         .as_deref()
-        .ok_or_else(|| anyhow::anyhow!("WQC_ORCHESTRATOR_PUBLIC_KEY is required for P2P dispatch"))?;
+        .ok_or_else(|| anyhow::anyhow!("orchestrator public key not configured"))?;
 
     verify_dispatch_signature(
         &message.sub_task,

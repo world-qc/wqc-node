@@ -19,6 +19,8 @@ use tokio::sync::mpsc;
 
 use std::time::Duration;
 
+use anyhow::Context;
+
 use application::state::AppState;
 use application::worker;
 use config::NodeConfig;
@@ -34,7 +36,7 @@ use transport::p2p::result_sink::P2pResultSink;
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
 
-    let config = NodeConfig::from_env()?;
+    let mut config = NodeConfig::from_env()?;
 
     let core_client = Arc::new(WqcCoreClient::new(
         &config.core_url,
@@ -45,6 +47,15 @@ async fn main() -> anyhow::Result<()> {
 
     let storage = infra::storage::Storage::new(&config.database_url)?;
     let http_client = geo::build_geo_http_client();
+
+    let bootstrap =
+        infra::orchestrator::resolve_bootstrap(&http_client, &config.bootstrap_urls)
+            .await
+            .context("failed to resolve orchestrator P2P bootstrap over HTTP")?;
+    config
+        .apply_orchestrator_bootstrap(bootstrap)
+        .context("invalid orchestrator bootstrap payload")?;
+
     let node_geo = geoip::resolve_node_location(&storage, &http_client).await;
     let pending_from_db = storage.get_pending_tasks()?;
     let pending_count = pending_from_db.len();
@@ -179,6 +190,22 @@ fn print_startup_banner(
         "Node libp2p PeerID:".bold()
     );
     println!("    {}", config.peer_id.underline().bright_cyan());
+    println!(
+        "  {} {}",
+        "➜".bright_yellow(),
+        "Orchestrator bootstrap:".bold()
+    );
+    if let Some(url) = &config.bootstrap_source_url {
+        println!("    {}", url.underline().bright_cyan());
+    }
+    if let Some(peer) = config.orchestrator_peer_id {
+        println!(
+            "  {} {}",
+            "➜".bright_yellow(),
+            "Orchestrator PeerID:".bold()
+        );
+        println!("    {}", peer.to_string().underline().bright_cyan());
+    }
     println!(
         "  {} {}",
         "➜".bright_yellow(),

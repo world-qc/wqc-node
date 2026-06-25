@@ -179,6 +179,8 @@ mod tests {
             max_qubits,
             compute_timeout_secs: 300,
             signing_key: SigningKey::from_bytes(&[0u8; 32]),
+            bootstrap_urls: vec![],
+            bootstrap_source_url: None,
             bootstrap_peers: vec![],
             p2p_listen_port: 0,
             http_port: 0,

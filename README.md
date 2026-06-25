@@ -56,7 +56,7 @@ Wire formats match the [orchestrator README](../wqc-orchestrator/README.md#p2p-p
 
 - **Rust** 1.95+ (to build from source)
 - **`wqc-core`** running and reachable (`WQC_CORE_URL`)
-- **Orchestrator** libp2p bootstrap multiaddr and Ed25519 public key
+- **Orchestrator** libp2p bootstrap (discovered via HTTP at node startup)
 
 ### Generate a node key
 
@@ -74,8 +74,7 @@ Set `WQC_NODE_PRIVATE_KEY` to that value. Log the derived PeerID from startup ou
 ```bash
 export WQC_NODE_PRIVATE_KEY="<base64-32-byte-seed>"
 export WQC_CORE_URL="http://localhost:3000"
-export WQC_ORCHESTRATOR_BOOTSTRAP="/ip4/127.0.0.1/tcp/4001/p2p/12D3KooW..."
-export WQC_ORCHESTRATOR_PUBLIC_KEY="<orchestrator-ed25519-pubkey-base64>"
+export WQC_BOOTSTRAP_URLS="http://localhost:9000/api/v1/p2p/bootstrap"
 export WQC_NODE_STAKE_WQC="0.05"
 export WQC_MAX_QUBITS="26"
 
@@ -90,8 +89,7 @@ See `world-qc-docker/wqc/compose.yml` for a five-node layout. Typical node env:
 WQC_NODE_PRIVATE_KEY: <unique per node>
 WQC_NODE_STAKE_WQC: "0.05"
 WQC_CORE_URL: unix:/var/run/wqc-core-01.sock   # or http://wqc-core-02:3000
-WQC_ORCHESTRATOR_BOOTSTRAP: /ip4/10.20.3.11/tcp/4001/p2p/<orchestrator-peer-id>
-WQC_ORCHESTRATOR_PUBLIC_KEY: <orchestrator-pubkey-base64>
+WQC_BOOTSTRAP_URLS: http://wqc-orchestrator-01:9000/api/v1/p2p/bootstrap
 WQC_DATABASE_URL: sqlite:wqc-node-01.db
 WQC_MAX_QUBITS: "26"
 WQC_P2P_LISTEN_PORT: "4002"
@@ -108,8 +106,7 @@ docker compose -f world-qc-docker/wqc/compose.yml up wqc-node-01
 | Variable | Required | Default | Description |
 | :--- | :---: | :--- | :--- |
 | `WQC_NODE_PRIVATE_KEY` | yes | — | Base64 Ed25519 seed (32 bytes). Derives libp2p PeerID and bid signatures. |
-| `WQC_ORCHESTRATOR_BOOTSTRAP` | yes | — | Comma-separated libp2p multiaddrs. Must include `/p2p/<peer-id>`. |
-| `WQC_ORCHESTRATOR_PUBLIC_KEY` | yes | — | Base64 Ed25519 public key of the trusted orchestrator (task ownership in SQLite). |
+| `WQC_BOOTSTRAP_URLS` | yes | — | Comma-separated full bootstrap HTTP(S) URLs (e.g. `http://host:9000/api/v1/p2p/bootstrap`). Failover left-to-right. |
 | `WQC_CORE_URL` | no | `http://localhost:3000` | `wqc-core` base URL or `unix:/path/to.sock`. |
 | `WQC_NODE_STAKE_WQC` | no | `0.05` | Human WQC amount sent as `stake_amount` (Planck integer on wire). |
 | `WQC_MAX_QUBITS` | no | `30` | Max qubits per sub-task; also advertised as `max_qubit_capability` in bids. |
@@ -130,9 +127,9 @@ Task ingress and results use **P2P only**—there is no `/submit` or webhook end
 
 ## Security Model
 
-1. **Bootstrap trust**: The node dials `WQC_ORCHESTRATOR_BOOTSTRAP` and only accepts announce/dispatch streams from that orchestrator's PeerID.
-2. **Announcement authenticity**: Each `TaskAnnouncement` carries an orchestrator Ed25519 signature verified against `WQC_ORCHESTRATOR_PUBLIC_KEY`.
-3. **Dispatch authenticity**: Each `SubTask` carries an orchestrator Ed25519 signature verified against `WQC_ORCHESTRATOR_PUBLIC_KEY`.
+1. **Bootstrap trust**: At startup the node `GET`s `WQC_BOOTSTRAP_URLS`, then dials the returned multiaddrs and pins that orchestrator PeerID.
+2. **Announcement authenticity**: Each `TaskAnnouncement` carries an orchestrator Ed25519 signature verified against the bootstrap `public_key_b64`.
+3. **Dispatch authenticity**: Each `SubTask` carries an orchestrator Ed25519 signature verified against the bootstrap `public_key_b64`.
 4. **Bid authenticity**: Each bid is signed with `WQC_NODE_PRIVATE_KEY` and includes a lottery proof for `bid_difficulty`.
 5. **Capability gating**: Gates from `wqc-core` `GET /gates` map to `supported_features`; the node skips announcements it cannot execute.
 6. **Trapdoor audits**: The orchestrator may inject golden sub-tasks; failures can lead to a ban on the orchestrator side.

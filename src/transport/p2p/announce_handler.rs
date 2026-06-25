@@ -55,7 +55,7 @@ async fn handle_announce_stream(
     let orchestrator_pubkey = config
         .orchestrator_public_key
         .as_deref()
-        .ok_or_else(|| anyhow::anyhow!("WQC_ORCHESTRATOR_PUBLIC_KEY is required for P2P announce"))?;
+        .ok_or_else(|| anyhow::anyhow!("orchestrator public key not configured"))?;
 
     let announcement = parse_signed_announcement(&payload, orchestrator_pubkey)
         .map_err(|e| anyhow::anyhow!("announcement rejected: {e}"))?;
