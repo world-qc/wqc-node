@@ -56,6 +56,10 @@ pub struct WorkReport {
     pub compute_wall_ms: u64,
     pub prove_wall_ms: u64,
     pub proof_bytes: u64,
+    #[serde(default)]
+    pub tn_backend: String,
+    #[serde(default)]
+    pub vram_peak_bytes: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -101,4 +105,12 @@ pub struct CoreSystemInfo {
     pub system_memory_used_kb: u64,
     pub system_memory_total_kb: u64,
     pub cpu_usage_percent: f32,
+    #[serde(default)]
+    pub tn_backend_requested: String,
+    #[serde(default)]
+    pub tn_backend_active: String,
+    #[serde(default)]
+    pub tn_backend_note: Option<String>,
+    #[serde(default)]
+    pub mps_max_bond_dim: usize,
 }

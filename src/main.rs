@@ -22,6 +22,7 @@ use std::time::Duration;
 use application::state::AppState;
 use application::worker;
 use config::NodeConfig;
+use domain::models::CoreSystemInfo;
 use infra::core_client::WqcCoreClient;
 use transport::http::handlers;
 use transport::p2p;
@@ -38,13 +39,14 @@ async fn main() -> anyhow::Result<()> {
         Duration::from_secs(config.compute_timeout_secs),
     ));
     let supported_gates = handlers::sync_core_capabilities(core_client.clone()).await;
+    let core_sysinfo = core_client.get_system_info().await.ok();
 
     let storage = infra::storage::Storage::new(&config.database_url)?;
     let pending_from_db = storage.get_pending_tasks()?;
     let pending_count = pending_from_db.len();
     let outbox_count = storage.count_pending_results().unwrap_or(0);
 
-    print_startup_banner(&config, pending_count, outbox_count);
+    print_startup_banner(&config, pending_count, outbox_count, core_sysinfo.as_ref());
 
     let (tx, rx) = mpsc::channel(100);
 
@@ -91,7 +93,12 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn print_startup_banner(config: &NodeConfig, recovered_task_count: usize, outbox_count: usize) {
+fn print_startup_banner(
+    config: &NodeConfig,
+    recovered_task_count: usize,
+    outbox_count: usize,
+    core_sysinfo: Option<&CoreSystemInfo>,
+) {
     let mut sys = System::new_all();
     sys.refresh_specifics(RefreshKind::new().with_memory(MemoryRefreshKind::everything()));
     let total_gb = sys.total_memory() / 1024 / 1024 / 1024;
@@ -150,6 +157,8 @@ fn print_startup_banner(config: &NodeConfig, recovered_task_count: usize, outbox
         );
     }
 
+    print_tn_engine_line(core_sysinfo);
+
     println!();
     println!(
         "  {} {}",
@@ -190,4 +199,58 @@ fn print_startup_banner(config: &NodeConfig, recovered_task_count: usize, outbox
         "Node runtime initialized. Waiting for orchestrator workload over P2P...".dimmed()
     );
     println!();
+}
+
+fn print_tn_engine_line(core_sysinfo: Option<&CoreSystemInfo>) {
+    let Some(info) = core_sysinfo else {
+        println!(
+            "  {}  {:15} {}",
+            "●".red(),
+            "TN Engine:".bold(),
+            "UNKNOWN (wqc-core unreachable)".red()
+        );
+        return;
+    };
+
+    let requested = if info.tn_backend_requested.is_empty() {
+        "cpu"
+    } else {
+        info.tn_backend_requested.as_str()
+    };
+    let active = if info.tn_backend_active.is_empty() {
+        "cpu"
+    } else {
+        info.tn_backend_active.as_str()
+    };
+
+    let engine_label = if requested == active {
+        match active {
+            "webgpu" => "WEBGPU".bright_magenta().bold().to_string(),
+            _ => "CPU MPS".bright_cyan().bold().to_string(),
+        }
+    } else {
+        format!(
+            "{} {} {}",
+            requested.to_ascii_uppercase().bright_yellow(),
+            "→".dimmed(),
+            active.to_ascii_uppercase().bright_red().bold()
+        )
+    };
+
+    println!(
+        "  {}  {:15} {}  (χ≤{})",
+        "●".magenta(),
+        "TN Engine:".bold(),
+        engine_label,
+        info.mps_max_bond_dim
+    );
+
+    if let Some(note) = &info.tn_backend_note {
+        println!(
+            "  {}  {:15} {}",
+            " ".normal(),
+            "↳".dimmed(),
+            note.italic().bright_black()
+        );
+    }
 }
