@@ -22,8 +22,10 @@ use std::time::Duration;
 use application::state::AppState;
 use application::worker;
 use config::NodeConfig;
+use domain::geo::{self, GeoInfo};
 use domain::models::CoreSystemInfo;
 use infra::core_client::WqcCoreClient;
+use infra::geoip;
 use transport::http::handlers;
 use transport::p2p;
 use transport::p2p::result_sink::P2pResultSink;
@@ -42,11 +44,19 @@ async fn main() -> anyhow::Result<()> {
     let core_sysinfo = core_client.get_system_info().await.ok();
 
     let storage = infra::storage::Storage::new(&config.database_url)?;
+    let http_client = geo::build_geo_http_client();
+    let node_geo = geoip::resolve_node_location(&storage, &http_client).await;
     let pending_from_db = storage.get_pending_tasks()?;
     let pending_count = pending_from_db.len();
     let outbox_count = storage.count_pending_results().unwrap_or(0);
 
-    print_startup_banner(&config, pending_count, outbox_count, core_sysinfo.as_ref());
+    print_startup_banner(
+        &config,
+        pending_count,
+        outbox_count,
+        core_sysinfo.as_ref(),
+        node_geo.as_ref(),
+    );
 
     let (tx, rx) = mpsc::channel(100);
 
@@ -54,6 +64,7 @@ async fn main() -> anyhow::Result<()> {
         task_sender: tx.clone(),
         pending_tasks: AtomicUsize::new(pending_count),
         core_client,
+        http_client,
         config: config.clone(),
         supported_gates,
         storage,
@@ -98,6 +109,7 @@ fn print_startup_banner(
     recovered_task_count: usize,
     outbox_count: usize,
     core_sysinfo: Option<&CoreSystemInfo>,
+    node_geo: Option<&GeoInfo>,
 ) {
     let mut sys = System::new_all();
     sys.refresh_specifics(RefreshKind::new().with_memory(MemoryRefreshKind::everything()));
@@ -158,6 +170,7 @@ fn print_startup_banner(
     }
 
     print_tn_engine_line(core_sysinfo);
+    print_geo_line(node_geo);
 
     println!();
     println!(
@@ -199,6 +212,26 @@ fn print_startup_banner(
         "Node runtime initialized. Waiting for orchestrator workload over P2P...".dimmed()
     );
     println!();
+}
+
+fn print_geo_line(node_geo: Option<&GeoInfo>) {
+    match node_geo {
+        Some(geo) => println!(
+            "  {}  {:15} {}, {} ({:.4}, {:.4})",
+            "●".bright_green(),
+            "GeoIP:".bold(),
+            geo.city.bright_cyan(),
+            geo.country.bright_cyan(),
+            geo.latitude,
+            geo.longitude
+        ),
+        None => println!(
+            "  {}  {:15} {}",
+            "●".yellow(),
+            "GeoIP:".bold(),
+            "unresolved (egress APIs unavailable)".yellow()
+        ),
+    }
 }
 
 fn print_tn_engine_line(core_sysinfo: Option<&CoreSystemInfo>) {

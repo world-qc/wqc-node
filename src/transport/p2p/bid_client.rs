@@ -11,6 +11,7 @@ use crate::config::NodeConfig;
 use crate::domain::bid;
 use crate::domain::features;
 use crate::domain::p2p::TaskAnnouncement;
+use crate::infra::geoip;
 use crate::transport::p2p::stream_io::write_outbound_stream;
 
 pub struct BidClient {
@@ -44,11 +45,14 @@ impl BidClient {
         }
 
         let current_load = self.state.pending_tasks.load(Ordering::Relaxed) as u32;
+        let location =
+            geoip::resolve_node_location(&self.state.storage, &self.state.http_client).await;
         let signed_bid = bid::build_signed_bid(
             &announcement,
             &self.config,
             current_load,
             supported_features,
+            location,
         )
             .ok_or_else(|| anyhow::anyhow!("failed to mine lottery proof within time window"))?;
 

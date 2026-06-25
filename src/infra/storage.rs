@@ -1,3 +1,4 @@
+use crate::domain::geo::{GeoInfo, GEO_CACHE_TTL_SECS};
 use crate::domain::models::ComputeTask;
 use rusqlite::{params, Connection};
 use std::sync::{Arc, Mutex};
@@ -42,6 +43,18 @@ impl Storage {
                 attempts INTEGER NOT NULL DEFAULT 0,
                 created_at INTEGER NOT NULL,
                 UNIQUE(orchestrator_pubkey, sub_task_id)
+            )",
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS geo_cache (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                latitude REAL NOT NULL,
+                longitude REAL NOT NULL,
+                country TEXT NOT NULL,
+                city TEXT NOT NULL,
+                updated_at INTEGER NOT NULL
             )",
             [],
         )?;
@@ -187,6 +200,43 @@ impl Storage {
         )?;
         Ok(())
     }
+
+    /// Returns cached geo when `updated_at` is within the last 24 hours.
+    pub fn get_cached_geo(&self) -> anyhow::Result<Option<GeoInfo>> {
+        let now = unix_now();
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT latitude, longitude, country, city FROM geo_cache
+             WHERE id = 1 AND (?1 - updated_at) < ?2",
+        )?;
+        let mut rows = stmt.query(params![now, GEO_CACHE_TTL_SECS])?;
+        if let Some(row) = rows.next()? {
+            return Ok(Some(GeoInfo {
+                latitude: row.get(0)?,
+                longitude: row.get(1)?,
+                country: row.get(2)?,
+                city: row.get(3)?,
+            }));
+        }
+        Ok(None)
+    }
+
+    pub fn save_geo_cache(&self, geo: &GeoInfo) -> anyhow::Result<()> {
+        let now = unix_now();
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO geo_cache (id, latitude, longitude, country, city, updated_at)
+             VALUES (1, ?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(id) DO UPDATE SET
+               latitude = excluded.latitude,
+               longitude = excluded.longitude,
+               country = excluded.country,
+               city = excluded.city,
+               updated_at = excluded.updated_at",
+            params![geo.latitude, geo.longitude, geo.country, geo.city, now],
+        )?;
+        Ok(())
+    }
 }
 
 fn unix_now() -> i64 {
@@ -218,6 +268,22 @@ mod tests {
             },
             orchestrator_pubkey: "orch-pubkey".to_string(),
         }
+    }
+
+    #[test]
+    fn geo_cache_round_trip_within_ttl() {
+        use crate::domain::geo::GeoInfo;
+
+        let storage = Storage::new(":memory:").unwrap();
+        let geo = GeoInfo {
+            latitude: 35.6762,
+            longitude: 139.6503,
+            country: "Japan".into(),
+            city: "Tokyo".into(),
+        };
+        storage.save_geo_cache(&geo).unwrap();
+        let loaded = storage.get_cached_geo().unwrap().expect("cached geo");
+        assert_eq!(loaded, geo);
     }
 
     #[test]

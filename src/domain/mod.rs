@@ -1,5 +1,6 @@
 pub mod bid;
 pub mod features;
+pub mod geo;
 pub mod models;
 pub mod p2p;
 pub mod result;

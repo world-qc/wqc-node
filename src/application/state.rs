@@ -15,6 +15,7 @@ pub struct AppState {
     pub task_sender: mpsc::Sender<ComputeTask>,
     pub pending_tasks: AtomicUsize,
     pub core_client: Arc<WqcCoreClient>,
+    pub http_client: reqwest::Client,
     pub config: NodeConfig,
     pub supported_gates: Vec<String>,
     pub storage: Storage,

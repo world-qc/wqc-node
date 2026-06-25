@@ -6,6 +6,7 @@ use sha2::{Digest, Sha256};
 
 use crate::config::NodeConfig;
 use crate::domain::features::{self};
+use crate::domain::geo::GeoInfo;
 use crate::domain::p2p::TaskAnnouncement;
 
 pub const PROTOCOL_BID: &str = "/wqc/tensor-net/1.0.0";
@@ -28,6 +29,8 @@ pub struct Bid {
     #[serde(serialize_with = "serialize_stake_as_string")]
     pub stake_amount: BigInt,
     pub supported_features: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub location: Option<GeoInfo>,
 }
 
 /// Returns true when this node should participate in the bidding round.
@@ -55,6 +58,7 @@ pub fn build_signed_bid(
     config: &NodeConfig,
     current_load: u32,
     supported_features: u32,
+    location: Option<GeoInfo>,
 ) -> Option<Bid> {
     let (timestamp, lottery_attempt, lottery_proof) =
         mine_lottery(&config.peer_id, announcement.nonce, announcement.bid_difficulty)?;
@@ -70,6 +74,7 @@ pub fn build_signed_bid(
         lottery_proof,
         stake_amount: config.stake_amount.clone(),
         supported_features,
+        location,
     };
 
     let payload = serialize_bid_payload(&bid);
@@ -245,6 +250,7 @@ mod tests {
             lottery_proof: vec![0xAA, 0xBB],
             stake_amount: BigInt::from(50_000),
             supported_features: supported,
+            location: None,
         };
 
         let payload = serialize_bid_payload(&bid);
