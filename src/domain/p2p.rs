@@ -52,6 +52,8 @@ pub struct SubTask {
     pub sample_seed: u64,
     #[serde(default)]
     pub observables: Vec<ObservableSpec>,
+    #[serde(default)]
+    pub noise_model: Option<crate::domain::models::NoiseModel>,
 }
 
 /// Mirrors orchestrator `bid.SerializeAnnouncementPayload` byte layout exactly.
@@ -267,6 +269,7 @@ impl SubTask {
                 None
             },
             observables: self.observables,
+            noise_model: self.noise_model,
         }
     }
 }
@@ -401,6 +404,7 @@ impl Default for SubTask {
             shots: 0,
             sample_seed: 0,
             observables: Vec::new(),
+            noise_model: None,
         }
     }
 }

@@ -14,6 +14,14 @@ pub struct SliceAssignment {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NoiseModel {
+    #[serde(default)]
+    pub depolarizing_p: Option<f64>,
+    #[serde(default)]
+    pub readout_error: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ComputeRequest {
     pub task_id: String,
     pub parent_task_id: Option<String>,
@@ -37,6 +45,8 @@ pub struct ComputeRequest {
     pub sample_seed: Option<u64>,
     #[serde(default)]
     pub observables: Vec<ObservableSpec>,
+    #[serde(default)]
+    pub noise_model: Option<NoiseModel>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

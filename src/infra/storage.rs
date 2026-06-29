@@ -270,6 +270,7 @@ mod tests {
                 shots: None,
                 sample_seed: None,
                 observables: vec![],
+                noise_model: None,
             },
             orchestrator_pubkey: "orch-pubkey".to_string(),
         }
