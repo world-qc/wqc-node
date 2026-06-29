@@ -265,6 +265,11 @@ mod tests {
                 circuit: vec![],
                 required_votes: Some(2),
                 mps_max_bond_dim: None,
+                output_mode: String::new(),
+                classical_bit_count: None,
+                shots: None,
+                sample_seed: None,
+                observables: vec![],
             },
             orchestrator_pubkey: "orch-pubkey".to_string(),
         }

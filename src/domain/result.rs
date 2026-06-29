@@ -1,4 +1,4 @@
-use crate::domain::models::{ComplexResult, Proof, SampleResult, WorkReport};
+use crate::domain::models::{ComplexResult, ExpectationResult, Proof, SampleResult, WorkReport};
 
 pub const PROTOCOL_RESULT: &str = "/wqc/tensor-result/1.0.0";
 
@@ -9,6 +9,7 @@ pub struct ResultMessage {
     pub result_type: String,
     pub complex_result: ComplexResult,
     pub sample_result: Option<SampleResult>,
+    pub expectation_result: Option<ExpectationResult>,
     pub proof: Proof,
     pub work_report: Option<WorkReport>,
     pub error: Option<String>,
@@ -35,6 +36,10 @@ impl ResultMessage {
             Some(sample) => format_go_sample_result_json(sample),
             None => "null".to_string(),
         };
+        let expectation_json = match &self.expectation_result {
+            Some(expectation) => format_go_expectation_result_json(expectation),
+            None => "null".to_string(),
+        };
         let proof_json = serde_json::to_string(&self.proof)?;
         let work_report_json = match &self.work_report {
             Some(report) => serde_json::to_string(report)?,
@@ -47,18 +52,34 @@ impl ResultMessage {
         let result_type_json = serde_json::to_string(&self.result_type)?;
 
         let body = format!(
-            r#"{{"sub_task_id":{},"node_id":{},"result_type":{},"complex_result":{},"sample_result":{},"proof":{},"work_report":{},"error":{}}}"#,
+            r#"{{"sub_task_id":{},"node_id":{},"result_type":{},"complex_result":{},"sample_result":{},"expectation_result":{},"proof":{},"work_report":{},"error":{}}}"#,
             serde_json::to_string(&self.sub_task_id)?,
             serde_json::to_string(&self.node_id)?,
             result_type_json,
             complex_json,
             sample_json,
+            expectation_json,
             proof_json,
             work_report_json,
             error_json,
         );
         Ok(body.into_bytes())
     }
+}
+
+/// Matches orchestrator canonical JSON for expectation-result hashing.
+pub fn format_go_expectation_result_json(value: &ExpectationResult) -> String {
+    let mut pairs = String::new();
+    for (id, result) in &value.values {
+        if !pairs.is_empty() {
+            pairs.push(',');
+        }
+        pairs.push_str(&format!(
+            r#""{id}":{}"#,
+            format_go_complex_result_json(result)
+        ));
+    }
+    format!(r#"{{"values":{{{pairs}}}}}"#)
 }
 
 /// Matches orchestrator canonical JSON for sample-result hashing.
@@ -104,6 +125,20 @@ mod tests {
             imag: 1.0,
         });
         assert_eq!(json, r#"{"real":0.0,"imag":1.0}"#);
+    }
+
+    #[test]
+    fn expectation_result_json_matches_orchestrator_canonical() {
+        let mut values = std::collections::BTreeMap::new();
+        values.insert(
+            "ZZ".to_string(),
+            ComplexResult {
+                real: 1.0,
+                imag: 0.0,
+            },
+        );
+        let json = format_go_expectation_result_json(&ExpectationResult { values });
+        assert_eq!(json, r#"{"values":{"ZZ":{"real":1.0,"imag":0.0}}}"#);
     }
 
     #[test]

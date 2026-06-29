@@ -5,13 +5,14 @@ use tokio::sync::mpsc;
 
 use crate::application::ports::ResultSink;
 use crate::application::state::AppState;
-use crate::domain::models::{ComplexResult, ComputeRequest, ComputeTask, SampleResult, TaskResultPayload};
+use crate::domain::models::{ComplexResult, ComputeRequest, ComputeTask, ExpectationResult, SampleResult, TaskResultPayload};
 use crate::infra::core_client::WqcCoreClient;
 
 struct TaskResultData {
     result_type: String,
     complex_result: ComplexResult,
     sample_result: Option<SampleResult>,
+    expectation_result: Option<ExpectationResult>,
     proof: crate::domain::models::Proof,
     execution_time_ms: u64,
     work_report: Option<crate::domain::models::WorkReport>,
@@ -46,6 +47,7 @@ async fn process_task(
             result_type: data.result_type,
             complex_result: Some(data.complex_result),
             sample_result: data.sample_result,
+            expectation_result: data.expectation_result,
             proof: Some(data.proof),
             error: None,
             execution_time_ms: Some(data.execution_time_ms),
@@ -59,6 +61,7 @@ async fn process_task(
                 result_type: String::new(),
                 complex_result: None,
                 sample_result: None,
+                expectation_result: None,
                 proof: None,
                 error: Some(e.to_string()),
                 execution_time_ms: None,
@@ -96,6 +99,7 @@ async fn execute_compute(
         },
         complex_result: res.complex_result,
         sample_result: res.sample_result,
+        expectation_result: res.expectation_result,
         proof: res.proof,
         execution_time_ms,
         work_report: res.work_report,

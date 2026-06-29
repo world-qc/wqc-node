@@ -37,6 +37,7 @@ pub fn build_result_wire_body(
         },
         complex_result: complex_result.clone(),
         sample_result: payload.sample_result.clone(),
+        expectation_result: payload.expectation_result.clone(),
         proof: proof.clone(),
         work_report: payload.work_report.clone(),
         error: None,

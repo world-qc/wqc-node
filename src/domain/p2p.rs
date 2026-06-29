@@ -3,7 +3,7 @@ use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::Deserialize;
 use serde_json;
 
-use crate::domain::models::{Gate, SliceAssignment};
+use crate::domain::models::{Gate, ObservableSpec, SliceAssignment};
 
 pub const ANNOUNCEMENT_TOPIC: &str = "wqc-global-announcements";
 pub const PROTOCOL_ANNOUNCE: &str = "/wqc/task-announce/1.0.0";
@@ -50,6 +50,8 @@ pub struct SubTask {
     pub shots: u64,
     #[serde(default)]
     pub sample_seed: u64,
+    #[serde(default)]
+    pub observables: Vec<ObservableSpec>,
 }
 
 /// Mirrors orchestrator `bid.SerializeAnnouncementPayload` byte layout exactly.
@@ -124,7 +126,68 @@ pub fn serialize_dispatch_payload(sub_task: &SubTask) -> Result<Vec<u8>, String>
     payload.extend_from_slice(&sub_task.classical_bit_count.to_be_bytes());
     payload.extend_from_slice(&sub_task.sample_seed.to_be_bytes());
 
+    let observables_json = format_observables_wire_json(&sub_task.observables);
+    payload.extend_from_slice(&(observables_json.len() as u32).to_be_bytes());
+    payload.extend_from_slice(observables_json.as_bytes());
+
     Ok(payload)
+}
+
+/// Canonical observables JSON for dispatch signing (matches orchestrator `FormatObservablesWireJSON`).
+fn format_observables_wire_json(observables: &[ObservableSpec]) -> String {
+    if observables.is_empty() {
+        return "[]".to_string();
+    }
+    let inner = format_observable_spec_json(observables);
+    // Strip `{"observables":` prefix and trailing `}`.
+    inner
+        .strip_prefix(r#"{"observables":"#)
+        .and_then(|s| s.strip_suffix('}'))
+        .unwrap_or(&inner)
+        .to_string()
+}
+
+fn format_observable_spec_json(observables: &[ObservableSpec]) -> String {
+    let mut sorted: Vec<&ObservableSpec> = observables.iter().collect();
+    sorted.sort_by(|a, b| a.id.cmp(&b.id));
+
+    let mut obs_parts = Vec::new();
+    for obs in sorted {
+        let mut terms = obs.terms.clone();
+        terms.sort_by(|a, b| a.label.cmp(&b.label));
+        let term_parts: Vec<String> = terms
+            .iter()
+            .map(|t| {
+                format!(
+                    r#"{{"coeff":{},"label":"{}"}}"#,
+                    format_complex_coeff_json(&t.coeff),
+                    t.label
+                )
+            })
+            .collect();
+        obs_parts.push(format!(
+            r#"{{"id":"{}","terms":[{}]}}"#,
+            obs.id,
+            term_parts.join(",")
+        ));
+    }
+    format!(r#"{{"observables":[{}]}}"#, obs_parts.join(","))
+}
+
+fn format_complex_coeff_json(coeff: &crate::domain::models::ComplexCoeff) -> String {
+    format!(
+        r#"{{"imag":{},"real":{}}}"#,
+        format_go_float(coeff.imag),
+        format_go_float(coeff.real)
+    )
+}
+
+fn format_go_float(val: f64) -> String {
+    if val == (val as i64) as f64 {
+        format!("{:.1}", val)
+    } else {
+        format!("{val}")
+    }
 }
 
 pub fn verify_dispatch_signature(
@@ -203,6 +266,7 @@ impl SubTask {
             } else {
                 None
             },
+            observables: self.observables,
         }
     }
 }
@@ -253,6 +317,7 @@ mod tests {
             }],
             required_votes: 2,
             mps_max_bond_dim: 128,
+            ..Default::default()
         };
 
         let payload = serialize_dispatch_payload(&sub_task).expect("serialize dispatch payload");
@@ -275,6 +340,67 @@ mod tests {
         expected.extend_from_slice(&0u64.to_be_bytes()); // shots
         expected.extend_from_slice(&0u32.to_be_bytes()); // classical_bit_count
         expected.extend_from_slice(&0u64.to_be_bytes()); // sample_seed
+        expected.extend_from_slice(&2u32.to_be_bytes()); // observables_json_len
+        expected.extend_from_slice(b"[]"); // observables_json
         assert_eq!(payload, expected);
+    }
+
+    #[test]
+    fn serialize_dispatch_payload_includes_observables() {
+        let sub_task = SubTask {
+            task_id: "sub-task-1".to_string(),
+            parent_task_id: "parent-uuid".to_string(),
+            circuit_id: "abc123".to_string(),
+            qubit_count: 2,
+            original_qubit_count: 2,
+            slice_id: "0".to_string(),
+            slice_assignments: vec![],
+            circuit: vec![Gate {
+                r#type: "H".to_string(),
+                params: serde_json::json!([0]),
+            }],
+            required_votes: 2,
+            output_mode: "expectation".to_string(),
+            observables: vec![crate::domain::models::ObservableSpec {
+                id: "ZZ".to_string(),
+                terms: vec![crate::domain::models::PauliTerm {
+                    label: "ZZ".to_string(),
+                    coeff: crate::domain::models::ComplexCoeff {
+                        real: 1.0,
+                        imag: 0.0,
+                    },
+                }],
+            }],
+            ..Default::default()
+        };
+
+        let payload = serialize_dispatch_payload(&sub_task).expect("serialize");
+        let obs_json = br#"[{"id":"ZZ","terms":[{"coeff":{"imag":0.0,"real":1.0},"label":"ZZ"}]}]"#;
+        let mut tail = Vec::new();
+        tail.extend_from_slice(&(obs_json.len() as u32).to_be_bytes());
+        tail.extend_from_slice(obs_json);
+        assert!(payload.ends_with(&tail));
+    }
+}
+
+impl Default for SubTask {
+    fn default() -> Self {
+        Self {
+            task_id: String::new(),
+            parent_task_id: String::new(),
+            circuit_id: String::new(),
+            qubit_count: 0,
+            original_qubit_count: 0,
+            slice_id: String::new(),
+            slice_assignments: Vec::new(),
+            circuit: Vec::new(),
+            required_votes: 0,
+            mps_max_bond_dim: 0,
+            output_mode: String::new(),
+            classical_bit_count: 0,
+            shots: 0,
+            sample_seed: 0,
+            observables: Vec::new(),
+        }
     }
 }

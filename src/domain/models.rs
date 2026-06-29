@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Gate {
@@ -34,6 +35,31 @@ pub struct ComputeRequest {
     pub shots: Option<u64>,
     #[serde(default)]
     pub sample_seed: Option<u64>,
+    #[serde(default)]
+    pub observables: Vec<ObservableSpec>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ComplexCoeff {
+    pub real: f64,
+    pub imag: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PauliTerm {
+    pub label: String,
+    pub coeff: ComplexCoeff,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ObservableSpec {
+    pub id: String,
+    pub terms: Vec<PauliTerm>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExpectationResult {
+    pub values: BTreeMap<String, ComplexResult>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -85,6 +111,8 @@ pub struct ComputeResponse {
     pub complex_result: ComplexResult,
     #[serde(default)]
     pub sample_result: Option<SampleResult>,
+    #[serde(default)]
+    pub expectation_result: Option<ExpectationResult>,
     pub proof: Proof,
     #[serde(default)]
     pub work_report: Option<WorkReport>,
@@ -99,6 +127,8 @@ pub struct TaskResultPayload {
     pub complex_result: Option<ComplexResult>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sample_result: Option<SampleResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expectation_result: Option<ExpectationResult>,
     pub proof: Option<Proof>,
     pub error: Option<String>,
     pub execution_time_ms: Option<u64>,
