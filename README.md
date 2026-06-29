@@ -16,7 +16,7 @@ Operational details (env vars, Docker, troubleshooting) live in [`docs/OPERATION
 ## Core Responsibilities
 
 - **Swarm participation**: Subscribe to task announcements, submit signed bids, receive dispatches.
-- **Slice execution**: Forward pruned circuits to `wqc-core`, collect `complex_result` + STARK `proof`.
+- **Slice execution**: Forward pruned circuits to `wqc-core`, collect `complex_result` or `sample_result` + STARK `proof`.
 - **Result delivery**: Stream results back to the orchestrator on `/wqc/tensor-result/1.0.0`.
 - **Crash recovery**: Persist pending tasks in SQLite and resume after restart.
 - **Admin surface**: Expose `GET /status` and `GET /health` for local monitoring.
@@ -46,9 +46,14 @@ The node runs **one sub-task at a time** per process. The orchestrator tracks in
 | `/wqc/task-announce/1.0.0` | Orchestrator → Node | Alternate announce stream (same payload) |
 | `/wqc/tensor-net/1.0.0` | Node → Orchestrator | Signed lottery `Bid` |
 | `/wqc/tensor-dispatch/1.0.0` | Orchestrator → Node | `SubTask` for execution |
-| `/wqc/tensor-result/1.0.0` | Node → Orchestrator | `complex_result` + `proof` + `work_report` |
+| `/wqc/tensor-result/1.0.0` | Node → Orchestrator | `result_type` + `complex_result` + optional `sample_result` + `proof` + `work_report` |
 
 Wire formats match the [orchestrator README](../wqc-orchestrator/README.md#p2p-protocols-node-facing).
+
+### Phase A: `sample_counts` (§3.4)
+
+Signed `SubTask` may include `output_mode`, `shots`, `classical_bit_count`, and orchestrator-generated `sample_seed`. The node forwards these to `wqc-core` unchanged and returns `result_type` + `sample_result` on `/wqc/tensor-result/1.0.0`.  
+`counts` bitstrings follow **Qiskit order** (rightmost = `cbit 0`). Scalar-only tasks are unchanged.
 
 ## Quick Start
 
@@ -144,8 +149,9 @@ Task ingress and results use **P2P only**—there is no `/submit` or webhook end
 - [x] `WQC_NODE_STAKE_WQC` → Planck stake on bids
 - [x] P2P result outbox (SQLite `pending_results`) + background retry
 
-### Phase 2 — Operations
+### Phase 2 — Operations & execution model
 
+- [x] **Phase A (§3.4)**: forward `output_mode`, `shots`, `classical_bit_count`, `sample_seed`; return `sample_result` on P2P
 - [ ] Prometheus metrics (`/status` is available today)
 - [ ] Hardware tuning via `wqc-core` (CPU/GPU is a core concern)
 
