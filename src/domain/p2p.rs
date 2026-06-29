@@ -42,6 +42,14 @@ pub struct SubTask {
     pub required_votes: u32,
     #[serde(default)]
     pub mps_max_bond_dim: u32,
+    #[serde(default)]
+    pub output_mode: String,
+    #[serde(default)]
+    pub classical_bit_count: u32,
+    #[serde(default)]
+    pub shots: u64,
+    #[serde(default)]
+    pub sample_seed: u64,
 }
 
 /// Mirrors orchestrator `bid.SerializeAnnouncementPayload` byte layout exactly.
@@ -109,6 +117,13 @@ pub fn serialize_dispatch_payload(sub_task: &SubTask) -> Result<Vec<u8>, String>
     payload.extend_from_slice(&circuit_json);
     payload.extend_from_slice(&sub_task.mps_max_bond_dim.to_be_bytes());
 
+    let output_mode = sub_task.output_mode.as_bytes();
+    payload.extend_from_slice(&(output_mode.len() as u32).to_be_bytes());
+    payload.extend_from_slice(output_mode);
+    payload.extend_from_slice(&sub_task.shots.to_be_bytes());
+    payload.extend_from_slice(&sub_task.classical_bit_count.to_be_bytes());
+    payload.extend_from_slice(&sub_task.sample_seed.to_be_bytes());
+
     Ok(payload)
 }
 
@@ -169,6 +184,22 @@ impl SubTask {
             required_votes: Some(self.required_votes),
             mps_max_bond_dim: if self.mps_max_bond_dim > 0 {
                 Some(self.mps_max_bond_dim as usize)
+            } else {
+                None
+            },
+            output_mode: self.output_mode.clone(),
+            classical_bit_count: if self.classical_bit_count > 0 {
+                Some(self.classical_bit_count)
+            } else {
+                None
+            },
+            shots: if self.shots > 0 {
+                Some(self.shots)
+            } else {
+                None
+            },
+            sample_seed: if self.sample_seed > 0 {
+                Some(self.sample_seed)
             } else {
                 None
             },
@@ -240,6 +271,10 @@ mod tests {
         expected.extend_from_slice(&(circuit_json.len() as u32).to_be_bytes());
         expected.extend_from_slice(circuit_json);
         expected.extend_from_slice(&128u32.to_be_bytes());
+        expected.extend_from_slice(&0u32.to_be_bytes()); // output_mode len
+        expected.extend_from_slice(&0u64.to_be_bytes()); // shots
+        expected.extend_from_slice(&0u32.to_be_bytes()); // classical_bit_count
+        expected.extend_from_slice(&0u64.to_be_bytes()); // sample_seed
         assert_eq!(payload, expected);
     }
 }

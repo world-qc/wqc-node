@@ -26,6 +26,14 @@ pub struct ComputeRequest {
     pub required_votes: Option<u32>,
     #[serde(default)]
     pub mps_max_bond_dim: Option<usize>,
+    #[serde(default)]
+    pub output_mode: String,
+    #[serde(default)]
+    pub classical_bit_count: Option<u32>,
+    #[serde(default)]
+    pub shots: Option<u64>,
+    #[serde(default)]
+    pub sample_seed: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -62,11 +70,21 @@ pub struct WorkReport {
     pub vram_peak_bytes: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SampleResult {
+    pub counts: std::collections::BTreeMap<String, u64>,
+    pub shots: u64,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ComputeResponse {
     pub task_id: String,
     pub status: String,
+    #[serde(default)]
+    pub result_type: String,
     pub complex_result: ComplexResult,
+    #[serde(default)]
+    pub sample_result: Option<SampleResult>,
     pub proof: Proof,
     #[serde(default)]
     pub work_report: Option<WorkReport>,
@@ -76,7 +94,11 @@ pub struct ComputeResponse {
 pub struct TaskResultPayload {
     pub task_id: String,
     pub status: String,
+    #[serde(default)]
+    pub result_type: String,
     pub complex_result: Option<ComplexResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sample_result: Option<SampleResult>,
     pub proof: Option<Proof>,
     pub error: Option<String>,
     pub execution_time_ms: Option<u64>,

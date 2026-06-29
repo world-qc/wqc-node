@@ -30,7 +30,13 @@ pub fn build_result_wire_body(
     let message = ResultMessage {
         sub_task_id: task.request.task_id.clone(),
         node_id: node_id.to_string(),
+        result_type: if payload.result_type.is_empty() {
+            "statevector_scalar".to_string()
+        } else {
+            payload.result_type.clone()
+        },
         complex_result: complex_result.clone(),
+        sample_result: payload.sample_result.clone(),
         proof: proof.clone(),
         work_report: payload.work_report.clone(),
         error: None,

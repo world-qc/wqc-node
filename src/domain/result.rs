@@ -1,4 +1,4 @@
-use crate::domain::models::{ComplexResult, Proof, WorkReport};
+use crate::domain::models::{ComplexResult, Proof, SampleResult, WorkReport};
 
 pub const PROTOCOL_RESULT: &str = "/wqc/tensor-result/1.0.0";
 
@@ -6,7 +6,9 @@ pub const PROTOCOL_RESULT: &str = "/wqc/tensor-result/1.0.0";
 pub struct ResultMessage {
     pub sub_task_id: String,
     pub node_id: String,
+    pub result_type: String,
     pub complex_result: ComplexResult,
+    pub sample_result: Option<SampleResult>,
     pub proof: Proof,
     pub work_report: Option<WorkReport>,
     pub error: Option<String>,
@@ -29,6 +31,10 @@ impl ResultMessage {
 
     pub fn to_json_bytes(&self) -> anyhow::Result<Vec<u8>> {
         let complex_json = format_go_complex_result_json(&self.complex_result);
+        let sample_json = match &self.sample_result {
+            Some(sample) => format_go_sample_result_json(sample),
+            None => "null".to_string(),
+        };
         let proof_json = serde_json::to_string(&self.proof)?;
         let work_report_json = match &self.work_report {
             Some(report) => serde_json::to_string(report)?,
@@ -38,18 +44,36 @@ impl ResultMessage {
             Some(err) => serde_json::to_string(err)?,
             None => "null".to_string(),
         };
+        let result_type_json = serde_json::to_string(&self.result_type)?;
 
         let body = format!(
-            r#"{{"sub_task_id":{},"node_id":{},"complex_result":{},"proof":{},"work_report":{},"error":{}}}"#,
+            r#"{{"sub_task_id":{},"node_id":{},"result_type":{},"complex_result":{},"sample_result":{},"proof":{},"work_report":{},"error":{}}}"#,
             serde_json::to_string(&self.sub_task_id)?,
             serde_json::to_string(&self.node_id)?,
+            result_type_json,
             complex_json,
+            sample_json,
             proof_json,
             work_report_json,
             error_json,
         );
         Ok(body.into_bytes())
     }
+}
+
+/// Matches orchestrator canonical JSON for sample-result hashing.
+pub fn format_go_sample_result_json(value: &SampleResult) -> String {
+    let mut counts_pairs = String::new();
+    for (key, count) in &value.counts {
+        if !counts_pairs.is_empty() {
+            counts_pairs.push(',');
+        }
+        counts_pairs.push_str(&format!(r#""{key}":{count}"#));
+    }
+    format!(
+        r#"{{"counts":{{{counts_pairs}}},"shots":{}}}"#,
+        value.shots
+    )
 }
 
 /// Matches orchestrator `ComplexResult.MarshalJSON` for hash verification.
