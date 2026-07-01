@@ -177,6 +177,7 @@ mod tests {
             peer_id: "test".to_string(),
             core_url: String::new(),
             max_qubits,
+            max_memory_gib: 0.0,
             compute_timeout_secs: 300,
             signing_key: SigningKey::from_bytes(&[0u8; 32]),
             bootstrap_urls: vec![],

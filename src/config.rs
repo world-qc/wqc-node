@@ -1,6 +1,9 @@
 use std::env;
 
 use anyhow::Context;
+use crate::memory_budget::resolve_max_qubits_from_memory_gb;
+use sysinfo::{MemoryRefreshKind, RefreshKind, System};
+
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use ed25519_dalek::SigningKey;
 use libp2p::identity::Keypair;
@@ -14,7 +17,10 @@ pub struct NodeConfig {
     /// libp2p PeerID string (used as node_id in P2P payloads).
     pub peer_id: String,
     pub core_url: String,
+    /// Derived from `WQC_MAX_MEMORY_GB` (dense `2^n × 16` envelope); advertised in bids.
     pub max_qubits: usize,
+    /// Effective WQC memory budget (GiB) after the 80% physical-RAM cap.
+    pub max_memory_gib: f64,
     pub compute_timeout_secs: u64,
     pub signing_key: SigningKey,
     /// Comma-separated bootstrap endpoint URLs from env (full path, failover order).
@@ -35,10 +41,17 @@ impl NodeConfig {
     pub fn from_env() -> anyhow::Result<Self> {
         let core_url =
             env::var("WQC_CORE_URL").unwrap_or_else(|_| "http://localhost:3000".to_string());
-        let max_qubits = env::var("WQC_MAX_QUBITS")
-            .unwrap_or_else(|_| "30".to_string())
-            .parse()
-            .unwrap_or(30);
+        let requested_memory_gib = env::var("WQC_MAX_MEMORY_GB")
+            .unwrap_or_else(|_| "16".to_string())
+            .parse::<f64>()
+            .context("WQC_MAX_MEMORY_GB must be a valid number")?;
+        let mut sys = System::new_with_specifics(
+            RefreshKind::new().with_memory(MemoryRefreshKind::everything()),
+        );
+        sys.refresh_memory();
+        let total_physical_bytes = sys.total_memory();
+        let (max_qubits, max_memory_gib) =
+            resolve_max_qubits_from_memory_gb(requested_memory_gib, total_physical_bytes);
         let compute_timeout_secs = env::var("WQC_COMPUTE_TIMEOUT_SECS")
             .unwrap_or_else(|_| "300".to_string())
             .parse()
@@ -78,7 +91,10 @@ impl NodeConfig {
             .with_context(|| format!("WQC_NODE_STAKE_WQC must be a valid WQC amount, got {stake_wqc:?}"))?;
 
         tracing::info!(
-            "Node Config Loaded: Max Qubits = {}, Compute Timeout = {}s",
+            "Node Config Loaded: WQC memory budget = {:.2} GiB (requested {:.2} GiB, host total {} KiB) → max_qubits = {}, compute timeout = {}s",
+            max_memory_gib,
+            requested_memory_gib,
+            total_physical_bytes / 1024,
             max_qubits,
             compute_timeout_secs
         );
@@ -93,6 +109,7 @@ impl NodeConfig {
             peer_id,
             core_url,
             max_qubits,
+            max_memory_gib,
             compute_timeout_secs,
             signing_key,
             bootstrap_urls,

@@ -44,7 +44,7 @@ Core must expose `GET /gates`, `GET /sysinfo`, and `POST /compute`.
 | Variable | Default | Notes |
 | :--- | :--- | :--- |
 | `WQC_NODE_STAKE_WQC` | `0.05` | Parsed to Planck (pWQC) for bid `stake_amount`. Up to 18 fractional digits. |
-| `WQC_MAX_QUBITS` | `30` | Sub-tasks above this are rejected. Nodes with `< 10` max qubits never bid (`NETWORK_MIN_QUBITS`). |
+| `WQC_MAX_MEMORY_GB` | `16` | WQC memory budget (GiB), capped at 80% of physical RAM. Derives max qubits (`2^n × 16` bytes). Nodes with `< 10` max qubits never bid (`NETWORK_MIN_QUBITS`). |
 | `WQC_COMPUTE_TIMEOUT_SECS` | `300` | Per-request timeout to core. |
 | `WQC_DATABASE_URL` | `sqlite:wqc-node.db` | Relative path is under the process working directory. |
 | `WQC_P2P_LISTEN_PORT` | `4002` | Bind `0.0.0.0` on TCP and QUIC. |
@@ -125,7 +125,7 @@ The node only declares stake in bids. Balance, rewards, and burns are handled by
 | :--- | :--- |
 | `WQC_BOOTSTRAP_URLS is required` | Env not set in container/shell |
 | `failed to resolve orchestrator P2P bootstrap` | Orchestrator HTTP down, or missing `WQC_P2P_ADVERTISE_ADDRS` |
-| Node never bids | `supported_features` mismatch, `WQC_MAX_QUBITS` &lt; 10, or announcement qubits above capability |
+| Node never bids | `supported_features` mismatch, derived `max_qubits` &lt; 10, or announcement qubits above capability |
 | `[P2P Dispatch] Rejected subtask from unauthorized peer` | Dispatch from non-bootstrap PeerID |
 | `failed to mine lottery proof within time window` | `bid_difficulty` too high for 10s window |
 | `wqc-core returned error status` | Core down, timeout (`WQC_COMPUTE_TIMEOUT_SECS`), or OOM on large circuits |

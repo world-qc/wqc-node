@@ -4,6 +4,7 @@ mod application;
 mod config;
 mod domain;
 mod infra;
+mod memory_budget;
 mod transport;
 
 use std::sync::atomic::AtomicUsize;

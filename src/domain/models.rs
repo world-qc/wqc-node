@@ -156,6 +156,7 @@ pub struct NodeStatus {
     pub pending_tasks: usize,
     pub outbox_pending: usize,
     pub max_qubits: usize,
+    pub max_memory_gib: f64,
     pub system_memory_used_kb: u64,
     pub system_memory_total_kb: u64,
     pub cpu_usage_percent: f32,

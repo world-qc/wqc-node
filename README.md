@@ -81,7 +81,7 @@ export WQC_NODE_PRIVATE_KEY="<base64-32-byte-seed>"
 export WQC_CORE_URL="http://localhost:3000"
 export WQC_BOOTSTRAP_URLS="http://localhost:9000/api/v1/p2p/bootstrap"
 export WQC_NODE_STAKE_WQC="0.05"
-export WQC_MAX_QUBITS="26"
+export WQC_MAX_MEMORY_GB="1"
 
 cargo run --release
 ```
@@ -96,7 +96,7 @@ WQC_NODE_STAKE_WQC: "0.05"
 WQC_CORE_URL: unix:/var/run/wqc-core-01.sock   # or http://wqc-core-02:3000
 WQC_BOOTSTRAP_URLS: http://wqc-orchestrator-01:9000/api/v1/p2p/bootstrap
 WQC_DATABASE_URL: sqlite:wqc-node-01.db
-WQC_MAX_QUBITS: "26"
+WQC_MAX_MEMORY_GB: "1"
 WQC_P2P_LISTEN_PORT: "4002"
 ```
 
@@ -114,7 +114,7 @@ docker compose -f world-qc-docker/wqc/compose.yml up wqc-node-01
 | `WQC_BOOTSTRAP_URLS` | yes | — | Comma-separated full bootstrap HTTP(S) URLs (e.g. `http://host:9000/api/v1/p2p/bootstrap`). Failover left-to-right. |
 | `WQC_CORE_URL` | no | `http://localhost:3000` | `wqc-core` base URL or `unix:/path/to.sock`. |
 | `WQC_NODE_STAKE_WQC` | no | `0.05` | Human WQC amount sent as `stake_amount` (Planck integer on wire). |
-| `WQC_MAX_QUBITS` | no | `30` | Max qubits per sub-task; also advertised as `max_qubit_capability` in bids. |
+| `WQC_MAX_MEMORY_GB` | no | `16` | WQC memory budget (GiB). Capped at 80% of host RAM. Derives `max_qubit_capability` as `floor(log2(budget / 16))` (dense `2^n × 16` envelope). |
 | `WQC_COMPUTE_TIMEOUT_SECS` | no | `300` | Timeout for `POST /compute` to core. |
 | `WQC_P2P_LISTEN_PORT` | no | `4002` | TCP/QUIC listen port for libp2p. |
 | `WQC_HTTP_PORT` | no | `8080` | Admin API bind port. |
@@ -126,7 +126,7 @@ docker compose -f world-qc-docker/wqc/compose.yml up wqc-node-01
 | Endpoint | Description |
 | :--- | :--- |
 | `GET /health` | `{"status":"UP"}` |
-| `GET /status` | Pending compute tasks, **outbox** pending results, `max_qubits`, core sysinfo, supported gates |
+| `GET /status` | Pending compute tasks, **outbox** pending results, `max_qubits`, `max_memory_gib`, core sysinfo, supported gates |
 
 Task ingress and results use **P2P only**—there is no `/submit` or webhook endpoint on the node.
 
