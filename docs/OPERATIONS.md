@@ -1,6 +1,19 @@
 # wqc-node Operations
 
-This document is the operational reference for running a worker node in the WQC devnet/PoC. It reflects the **libp2p P2P** architecture (the legacy HTTP `/submit` + webhook path is removed).
+This document is the operational reference for running a worker node in the WQC devnet / public-testnet style environment. It reflects the **libp2p P2P** architecture; the legacy HTTP `/submit` + webhook path is removed.
+
+Use this guide after reading `wqc-node/README.md`. The README is the entry point; this file is the runbook.
+
+## Quick operator checklist
+
+Before starting a node, confirm all of the following:
+
+- `wqc-core` is running and reachable from `WQC_CORE_URL`
+- `WQC_NODE_PRIVATE_KEY` is set to a Base64-encoded 32-byte Ed25519 seed
+- `WQC_BOOTSTRAP_URLS` points at at least one working orchestrator bootstrap endpoint
+- `WQC_MAX_MEMORY_GB` is set to a value that makes sense for the host
+- the host can accept inbound libp2p traffic on `WQC_P2P_LISTEN_PORT` if needed by your network topology
+- `jq` is available locally if you plan to use the sample status commands below
 
 ## Runtime layout
 
@@ -12,6 +25,13 @@ This document is the operational reference for running a worker node in the WQC 
 | `wqc-orchestrator` libp2p | `4001` | Bootstrap peer for nodes |
 
 Each node process executes **one sub-task at a time**. Throughput scales by adding nodes, not by raising per-node concurrency.
+
+## Public participation model
+
+- The node is a **worker**, not a client entrypoint.
+- Task traffic is **P2P only**.
+- The HTTP server is **admin-only** and meant for local checks.
+- Rewards, burns, and client balances are maintained by the orchestrator-side off-chain ledger in the current testnet model.
 
 ## Required configuration
 
@@ -39,6 +59,24 @@ Orchestrator must expose dialable libp2p addresses. In Docker set `WQC_P2P_ADVER
 
 Core must expose `GET /gates`, `GET /sysinfo`, and `POST /compute`.
 
+## Recommended minimal configuration
+
+For most participants, these are the only variables you need to touch first:
+
+```bash
+export WQC_NODE_PRIVATE_KEY="<base64-32-byte-seed>"
+export WQC_BOOTSTRAP_URLS="http://localhost:9000/api/v1/p2p/bootstrap"
+export WQC_CORE_URL="http://localhost:3000"
+export WQC_MAX_MEMORY_GB="1"
+export WQC_NODE_STAKE_WQC="0.05"
+```
+
+Then start the node:
+
+```bash
+cargo run --release
+```
+
 ## Optional configuration
 
 | Variable | Default | Notes |
@@ -52,6 +90,21 @@ Core must expose `GET /gates`, `GET /sysinfo`, and `POST /compute`.
 | `WQC_RESULT_RETRY_INTERVAL_SECS` | `5` | Interval for background P2P result outbox retries. |
 | `RUST_LOG` | — | e.g. `info` or `wqc_node=debug` |
 
+### Memory budget notes
+
+`WQC_MAX_MEMORY_GB` is the main participant-facing sizing knob.
+
+- The node first caps the requested budget at **80% of physical RAM**
+- It then derives `max_qubits` from the dense envelope `2^n × 16` bytes
+- That derived value is what the node advertises to the orchestrator
+
+Examples:
+
+- `1 GiB` budget → about `26` qubits
+- `16 GiB` budget → about `30` qubits
+
+If your node never bids, an overly small effective memory budget is one of the first things to check.
+
 ## Lifecycle
 
 ### Startup
@@ -63,6 +116,17 @@ Core must expose `GET /gates`, `GET /sysinfo`, and `POST /compute`.
 5. Start libp2p host: dial bootstrap, subscribe to gossip, accept stream protocols.
 6. Start result outbox retry loop (`WQC_RESULT_RETRY_INTERVAL_SECS`, default 5s).
 7. Start single worker loop and admin HTTP server.
+
+### Healthy startup signals
+
+Look for:
+
+- successful bootstrap resolution
+- successful `GET /gates` against `wqc-core`
+- `P2P host started`
+- `Connected to peer`
+
+If those appear, the node is usually ready to receive announcements and submit bids.
 
 ### Task flow
 
@@ -82,6 +146,21 @@ Core must expose `GET /gates`, `GET /sysinfo`, and `POST /compute`.
 
 Completed/failed `tasks` rows are not pruned automatically.
 
+## First checks after startup
+
+```bash
+curl -s "http://localhost:8080/health"
+curl -s "http://localhost:8080/status" | jq .
+```
+
+Pay attention to:
+
+- `max_qubits`
+- `max_memory_gib`
+- `pending_tasks`
+- `outbox_pending`
+- core sysinfo visibility
+
 ## Docker compose (devnet)
 
 Reference: `world-qc-docker/wqc/compose.yml`
@@ -89,6 +168,7 @@ Reference: `world-qc-docker/wqc/compose.yml`
 - Five nodes (`wqc-node-01` … `05`), each with a unique `WQC_NODE_PRIVATE_KEY` and SQLite file.
 - Shared bootstrap URL `http://wqc-orchestrator-01:9000/api/v1/p2p/bootstrap`; orchestrator advertises P2P on `10.20.3.11:4001`.
 - `WQC_NODE_STAKE_WQC=0.05` on all nodes.
+- `WQC_MAX_MEMORY_GB=1` is a reasonable small-host dev/test setting.
 
 Rebuild after code changes:
 
@@ -109,9 +189,21 @@ curl -s "http://localhost:8080/status" | jq .
 #   [P2P] Connected to peer <orchestrator-peer-id>
 ```
 
+Useful interpretations:
+
+- `health=UP` but no bids: usually capability mismatch, bootstrap issues, or no incoming tasks
+- rising `outbox_pending`: compute succeeded but result delivery is retrying
+- rising `pending_tasks`: core is slow, stuck, or timing out
+
 ## Economics (orchestrator-side)
 
 The node only declares stake in bids. Balance, rewards, and burns are handled by the orchestrator Redis ledger. See `wqc-orchestrator/docs/ECONOMICS.md`.
+
+For public participants, this means:
+
+- you do **not** need an on-chain wallet flow to run a node today
+- stake is an advertised bid parameter, not a self-custodied on-chain lock
+- settlement and faucet behavior are currently testnet services operated on the orchestrator side
 
 | Concern | Where |
 | :--- | :--- |
@@ -131,6 +223,21 @@ The node only declares stake in bids. Balance, rewards, and burns are handled by
 | `wqc-core returned error status` | Core down, timeout (`WQC_COMPUTE_TIMEOUT_SECS`), or OOM on large circuits |
 | Pending tasks stuck after restart | Expected until core completes; check core logs |
 | Result delivery failed | P2P disconnect; row kept in `pending_results` and **retried automatically** (check `GET /status` → `outbox_pending`) |
+
+### Recommended triage order
+
+1. Check `GET /health`
+2. Check `GET /status`
+3. Check `wqc-node` logs for bootstrap / P2P errors
+4. Check `wqc-core` logs for compute or memory failures
+5. Verify the bootstrap endpoint by calling `WQC_BOOTSTRAP_URLS` directly
+
+### Common public-testnet mistakes
+
+- Using a bootstrap URL that is reachable over HTTP but returns undialable libp2p addresses
+- Setting `WQC_MAX_MEMORY_GB` higher than the host can realistically sustain
+- Pointing `WQC_CORE_URL` at a core instance that is up but missing expected endpoints
+- Reusing the same node private key across multiple node processes
 
 ## Related docs
 
