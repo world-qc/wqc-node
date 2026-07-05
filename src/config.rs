@@ -35,6 +35,10 @@ pub struct NodeConfig {
     pub orchestrator_peer_id: Option<PeerId>,
     /// Base64 Ed25519 public key of the trusted orchestrator (P2P dispatch + result trust).
     pub orchestrator_public_key: Option<String>,
+    /// Economic operator identity (sha256 hex of derived operator pubkey).
+    pub operator_id: Option<String>,
+    /// Ed25519 key derived from `WQC_TESTNET_NODE_KEY` for operator bid signatures.
+    pub operator_signing_key: Option<SigningKey>,
 }
 
 impl NodeConfig {
@@ -105,6 +109,22 @@ impl NodeConfig {
             stake_amount
         );
 
+        let (operator_id, operator_signing_key) =
+            match env::var("WQC_TESTNET_NODE_KEY") {
+                Ok(node_key) if !node_key.trim().is_empty() => {
+                    let (operator_id, key) =
+                        crate::domain::operator::derive_operator_keypair(node_key.trim())?;
+                    tracing::info!("Operator ID loaded from WQC_TESTNET_NODE_KEY: {}", operator_id);
+                    (Some(operator_id), Some(key))
+                }
+                _ => {
+                    tracing::warn!(
+                        "WQC_TESTNET_NODE_KEY is not set; bids will be rejected (operator signature required)"
+                    );
+                    (None, None)
+                }
+            };
+
         Ok(Self {
             peer_id,
             core_url,
@@ -121,6 +141,8 @@ impl NodeConfig {
             stake_amount,
             orchestrator_peer_id: None,
             orchestrator_public_key: None,
+            operator_id,
+            operator_signing_key,
         })
     }
 

@@ -7,6 +7,7 @@ use sha2::{Digest, Sha256};
 use crate::config::NodeConfig;
 use crate::domain::features::{self};
 use crate::domain::geo::GeoInfo;
+use crate::domain::operator::serialize_operator_bid_payload;
 use crate::domain::p2p::TaskAnnouncement;
 
 pub const PROTOCOL_BID: &str = "/wqc/tensor-net/1.0.0";
@@ -31,6 +32,10 @@ pub struct Bid {
     pub supported_features: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub location: Option<GeoInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub operator_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", serialize_with = "serialize_optional_bytes_as_base64")]
+    pub operator_sig: Option<Vec<u8>>,
 }
 
 /// Returns true when this node should participate in the bidding round.
@@ -60,6 +65,9 @@ pub fn build_signed_bid(
     supported_features: u32,
     location: Option<GeoInfo>,
 ) -> Option<Bid> {
+    let operator_id = config.operator_id.clone()?;
+    let operator_signing_key = config.operator_signing_key.as_ref()?;
+
     let (timestamp, lottery_attempt, lottery_proof) =
         mine_lottery(&config.peer_id, announcement.nonce, announcement.bid_difficulty)?;
 
@@ -75,13 +83,27 @@ pub fn build_signed_bid(
         stake_amount: config.stake_amount.clone(),
         supported_features,
         location,
+        operator_id: Some(operator_id.clone()),
+        operator_sig: None,
     };
 
     let payload = serialize_bid_payload(&bid);
     let signature = config.signing_key.sign(&payload).to_bytes().to_vec();
 
+    let operator_payload = serialize_operator_bid_payload(
+        &operator_id,
+        &bid.node_id,
+        &bid.task_id,
+        &bid.stake_amount,
+    );
+    let operator_sig = operator_signing_key
+        .sign(&operator_payload)
+        .to_bytes()
+        .to_vec();
+
     Some(Bid {
         signature,
+        operator_sig: Some(operator_sig),
         ..bid
     })
 }
@@ -157,6 +179,19 @@ where
     serializer.serialize_str(&STANDARD.encode(bytes))
 }
 
+fn serialize_optional_bytes_as_base64<S>(
+    bytes: &Option<Vec<u8>>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    match bytes {
+        Some(value) => serializer.serialize_str(&STANDARD.encode(value)),
+        None => serializer.serialize_none(),
+    }
+}
+
 fn serialize_stake_as_string<S>(value: &BigInt, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
@@ -189,6 +224,8 @@ mod tests {
             stake_amount: BigInt::from(0),
             orchestrator_peer_id: None,
             orchestrator_public_key: None,
+            operator_id: None,
+            operator_signing_key: None,
         }
     }
 
@@ -254,6 +291,8 @@ mod tests {
             stake_amount: BigInt::from(50_000),
             supported_features: supported,
             location: None,
+            operator_id: None,
+            operator_sig: None,
         };
 
         let payload = serialize_bid_payload(&bid);

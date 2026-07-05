@@ -82,6 +82,7 @@ cargo run --release
 | Variable | Default | Notes |
 | :--- | :--- | :--- |
 | `WQC_NODE_STAKE_WQC` | `0.05` | Parsed to Planck (pWQC) for bid `stake_amount`. Up to 18 fractional digits. |
+| `WQC_TESTNET_NODE_KEY` | — | **Public testnet:** Node Key from the dashboard (`nk_…`). Derives operator identity and `operator_sig` on bids. Without it, bids are rejected. |
 | `WQC_MAX_MEMORY_GB` | `16` | WQC memory budget (GiB), capped at 80% of physical RAM. Derives max qubits (`2^n × 16` bytes). Nodes with `< 10` max qubits never bid (`NETWORK_MIN_QUBITS`). |
 | `WQC_COMPUTE_TIMEOUT_SECS` | `300` | Per-request timeout to core. |
 | `WQC_DATABASE_URL` | `sqlite:wqc-node.db` | Relative path is under the process working directory. |
