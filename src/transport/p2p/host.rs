@@ -54,6 +54,57 @@ fn dial_bootstrap_peers(swarm: &mut Swarm<NodeBehaviour>, addrs: &[Multiaddr], l
     }
 }
 
+/// Re-announce gossip interest to the orchestrator after a dial (rust-libp2p #1671).
+///
+/// Always clears the local subscription first so `subscribe()` sends a fresh SUBSCRIBE
+/// control frame even when a parallel TCP/QUIC transport is still up.
+fn subscribe_orchestrator_announcements(
+    swarm: &mut Swarm<NodeBehaviour>,
+    topic: &IdentTopic,
+    orchestrator_peer_id: PeerId,
+) {
+    swarm
+        .behaviour_mut()
+        .gossipsub
+        .add_explicit_peer(&orchestrator_peer_id);
+    let _ = swarm.behaviour_mut().gossipsub.unsubscribe(topic);
+    match swarm.behaviour_mut().gossipsub.subscribe(topic) {
+        Ok(true) => tracing::info!(
+            "[P2P Gossip] Subscribed to {} after connecting to orchestrator",
+            ANNOUNCEMENT_TOPIC
+        ),
+        Ok(false) => tracing::warn!(
+            "[P2P Gossip] Forced subscribe to {} returned false",
+            ANNOUNCEMENT_TOPIC
+        ),
+        Err(e) => tracing::warn!(
+            "[P2P Gossip] Subscribe to {} failed: {:?}",
+            ANNOUNCEMENT_TOPIC,
+            e
+        ),
+    }
+}
+
+/// Drop local gossip interest when the orchestrator link is fully gone so the next
+/// dial sends a fresh SUBSCRIBE control message (go-libp2p only tracks live subscriptions).
+fn unsubscribe_orchestrator_announcements(swarm: &mut Swarm<NodeBehaviour>, topic: &IdentTopic) {
+    match swarm.behaviour_mut().gossipsub.unsubscribe(topic) {
+        Ok(true) => tracing::info!(
+            "[P2P Gossip] Unsubscribed from {} after orchestrator disconnect",
+            ANNOUNCEMENT_TOPIC
+        ),
+        Ok(false) => tracing::debug!(
+            "[P2P Gossip] Already unsubscribed from {}",
+            ANNOUNCEMENT_TOPIC
+        ),
+        Err(e) => tracing::warn!(
+            "[P2P Gossip] Unsubscribe from {} failed: {:?}",
+            ANNOUNCEMENT_TOPIC,
+            e
+        ),
+    }
+}
+
 fn schedule_bootstrap_redial(
     attempt: u32,
     sleep: &mut Option<Pin<Box<Sleep>>>,
@@ -97,7 +148,7 @@ async fn run(config: NodeConfig, state: Arc<AppState>) -> anyhow::Result<()> {
         .build()
         .map_err(|e| anyhow::anyhow!("gossipsub config: {}", e))?;
 
-    let mut gossipsub_behaviour: gossipsub::Behaviour<IdentityTransform> = gossipsub::Behaviour::new(
+    let gossipsub_behaviour: gossipsub::Behaviour<IdentityTransform> = gossipsub::Behaviour::new(
         MessageAuthenticity::Signed(keypair.clone()),
         gossipsub_config,
     )
@@ -309,29 +360,15 @@ fn handle_swarm_event(
             if peer_id == orchestrator_peer_id {
                 *redial_attempt = 0;
                 *redial_sleep = None;
-                // Workaround rust-libp2p #1671: re-announce subscription after dial so the
-                // bootstrap peer learns we are on the topic.
-                swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer_id);
-                match swarm.behaviour_mut().gossipsub.subscribe(topic) {
-                    Ok(true) => tracing::info!(
-                        "[P2P Gossip] Subscribed to {} after connecting to orchestrator",
-                        ANNOUNCEMENT_TOPIC
-                    ),
-                    Ok(false) => tracing::debug!(
-                        "[P2P Gossip] Already subscribed to {} on orchestrator connect",
-                        ANNOUNCEMENT_TOPIC
-                    ),
-                    Err(e) => tracing::warn!(
-                        "[P2P Gossip] Re-subscribe to {} failed: {:?}",
-                        ANNOUNCEMENT_TOPIC,
-                        e
-                    ),
-                }
+                subscribe_orchestrator_announcements(swarm, topic, peer_id);
             }
         }
         SwarmEvent::ConnectionClosed { peer_id, .. } => {
             tracing::info!("[P2P] Disconnected from peer {}", peer_id);
             if peer_id == orchestrator_peer_id {
+                if !swarm.is_connected(&orchestrator_peer_id) {
+                    unsubscribe_orchestrator_announcements(swarm, topic);
+                }
                 schedule_bootstrap_redial(*redial_attempt, redial_sleep);
             }
         }
