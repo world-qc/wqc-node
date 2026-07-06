@@ -54,19 +54,33 @@ fn dial_bootstrap_peers(swarm: &mut Swarm<NodeBehaviour>, addrs: &[Multiaddr], l
     }
 }
 
-/// Re-announce gossip interest to the orchestrator after a dial (rust-libp2p #1671).
+/// (Re)subscribe to orchestrator announcements.
 ///
-/// Always clears the local subscription first so `subscribe()` sends a fresh SUBSCRIBE
-/// control frame even when a parallel TCP/QUIC transport is still up.
-fn subscribe_orchestrator_announcements(
+/// On the **first** transport to the orchestrator we force unsubscribe→subscribe so a
+/// fresh SUBSCRIBE control frame is sent after a full disconnect (rust-libp2p #1671).
+///
+/// On **additional** transports (TCP + QUIC to the same peer) we must NOT unsubscribe:
+/// gossipsub tracks subscriptions per PeerId, so an UNSUBSCRIBE removes the peer from the
+/// hub's `topic_peers` for all transports until SUBSCRIBE returns — announcements published
+/// in that window are lost.
+fn ensure_orchestrator_gossip_subscription(
     swarm: &mut Swarm<NodeBehaviour>,
     topic: &IdentTopic,
     orchestrator_peer_id: PeerId,
+    first_transport: bool,
 ) {
     swarm
         .behaviour_mut()
         .gossipsub
         .add_explicit_peer(&orchestrator_peer_id);
+
+    if !first_transport {
+        tracing::debug!(
+            "[P2P Gossip] Additional orchestrator transport; keeping existing subscription"
+        );
+        return;
+    }
+
     let _ = swarm.behaviour_mut().gossipsub.unsubscribe(topic);
     match swarm.behaviour_mut().gossipsub.subscribe(topic) {
         Ok(true) => tracing::info!(
@@ -355,12 +369,21 @@ fn handle_swarm_event(
                 swarm.local_peer_id()
             );
         }
-        SwarmEvent::ConnectionEstablished { peer_id, .. } => {
+        SwarmEvent::ConnectionEstablished {
+            peer_id,
+            num_established,
+            ..
+        } => {
             tracing::info!("[P2P] Connected to peer {}", peer_id);
             if peer_id == orchestrator_peer_id {
                 *redial_attempt = 0;
                 *redial_sleep = None;
-                subscribe_orchestrator_announcements(swarm, topic, peer_id);
+                ensure_orchestrator_gossip_subscription(
+                    swarm,
+                    topic,
+                    peer_id,
+                    num_established.get() == 1,
+                );
             }
         }
         SwarmEvent::ConnectionClosed { peer_id, .. } => {
