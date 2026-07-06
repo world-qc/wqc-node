@@ -1,5 +1,6 @@
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::time::Duration;
 
 use futures::{AsyncWriteExt, StreamExt};
 use libp2p::PeerId;
@@ -57,13 +58,38 @@ impl BidClient {
             .ok_or_else(|| anyhow::anyhow!("failed to mine lottery proof within time window"))?;
 
         let payload = serde_json::to_vec(&signed_bid)?;
-        write_outbound_stream(
-            &self.control,
-            orchestrator_peer_id,
-            bid::PROTOCOL_BID,
-            &payload,
-        )
-        .await?;
+        const MAX_ATTEMPTS: u32 = 3;
+        let mut last_err = None;
+        for attempt in 0..MAX_ATTEMPTS {
+            match write_outbound_stream(
+                &self.control,
+                orchestrator_peer_id,
+                bid::PROTOCOL_BID,
+                &payload,
+            )
+            .await
+            {
+                Ok(()) => {
+                    last_err = None;
+                    break;
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "[P2P Bid] Submit attempt {} failed for task_id={}: {}",
+                        attempt + 1,
+                        announcement.task_id,
+                        e
+                    );
+                    last_err = Some(e);
+                    if attempt + 1 < MAX_ATTEMPTS {
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                    }
+                }
+            }
+        }
+        if let Some(e) = last_err {
+            return Err(e);
+        }
 
         tracing::info!(
             "[P2P Bid] Submitted bid for task_id={} to orchestrator {}",
