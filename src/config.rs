@@ -19,7 +19,7 @@ pub struct NodeConfig {
     pub core_url: String,
     /// Derived from `WQC_MAX_MEMORY_GB` (dense `2^n × 16` envelope); advertised in bids.
     pub max_qubits: usize,
-    /// Effective WQC memory budget (GiB) after the 80% physical-RAM cap.
+    /// Effective WQC memory budget (GiB) after host reserve cap.
     pub max_memory_gib: f64,
     pub compute_timeout_secs: u64,
     pub signing_key: SigningKey,
