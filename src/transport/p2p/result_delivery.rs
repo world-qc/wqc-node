@@ -11,10 +11,7 @@ pub fn build_result_wire_body(
     node_id: &str,
 ) -> anyhow::Result<Vec<u8>> {
     if payload.status != "success" {
-        let error = payload
-            .error
-            .as_deref()
-            .unwrap_or("compute failed");
+        let error = payload.error.as_deref().unwrap_or("compute failed");
         return ResultMessage::failure_json_bytes(&task.request.task_id, node_id, error);
     }
 

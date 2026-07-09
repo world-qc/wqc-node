@@ -27,7 +27,7 @@ pub struct TaskAnnouncementMessage {
 }
 
 /// SubTask mirrors the orchestrator dispatch payload.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Default)]
 pub struct SubTask {
     pub task_id: String,
     pub parent_task_id: String,
@@ -72,8 +72,8 @@ pub fn parse_signed_announcement(
     payload: &[u8],
     orchestrator_public_key_b64: &str,
 ) -> Result<TaskAnnouncement, String> {
-    let message: TaskAnnouncementMessage = serde_json::from_slice(payload)
-        .map_err(|e| format!("invalid announcement JSON: {e}"))?;
+    let message: TaskAnnouncementMessage =
+        serde_json::from_slice(payload).map_err(|e| format!("invalid announcement JSON: {e}"))?;
     verify_announcement_message(&message, orchestrator_public_key_b64)?;
     Ok(message.announcement)
 }
@@ -383,28 +383,5 @@ mod tests {
         tail.extend_from_slice(&(obs_json.len() as u32).to_be_bytes());
         tail.extend_from_slice(obs_json);
         assert!(payload.ends_with(&tail));
-    }
-}
-
-impl Default for SubTask {
-    fn default() -> Self {
-        Self {
-            task_id: String::new(),
-            parent_task_id: String::new(),
-            circuit_id: String::new(),
-            qubit_count: 0,
-            original_qubit_count: 0,
-            slice_id: String::new(),
-            slice_assignments: Vec::new(),
-            circuit: Vec::new(),
-            required_votes: 0,
-            mps_max_bond_dim: 0,
-            output_mode: String::new(),
-            classical_bit_count: 0,
-            shots: 0,
-            sample_seed: 0,
-            observables: Vec::new(),
-            noise_model: None,
-        }
     }
 }

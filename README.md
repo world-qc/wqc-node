@@ -161,6 +161,10 @@ Task ingress and results use **P2P only**—there is no `/submit` or webhook end
 - [ ] libp2p DHT orchestrator discovery (replacing static bootstrap)
 - [ ] On-chain $WQC settlement from verified root proofs
 
+## Contributing
+
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, coding guidelines, and the pull request process.
+
 ## License
 
 Distributed under the GNU General Public License v3.0 (GPLv3). See `LICENSE` for more information.

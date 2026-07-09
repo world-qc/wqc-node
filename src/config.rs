@@ -1,7 +1,7 @@
 use std::env;
 
-use anyhow::Context;
 use crate::memory_budget::resolve_max_qubits_from_memory_gb;
+use anyhow::Context;
 use sysinfo::{MemoryRefreshKind, RefreshKind, System};
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
@@ -67,7 +67,9 @@ impl NodeConfig {
             .to_string();
 
         let bootstrap_urls: Vec<_> = env::var("WQC_BOOTSTRAP_URLS")
-            .context("WQC_BOOTSTRAP_URLS is required (comma-separated full bootstrap HTTP(S) URLs)")?
+            .context(
+                "WQC_BOOTSTRAP_URLS is required (comma-separated full bootstrap HTTP(S) URLs)",
+            )?
             .split(',')
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
@@ -91,8 +93,10 @@ impl NodeConfig {
             env::var("WQC_DATABASE_URL").unwrap_or_else(|_| "sqlite:wqc-node.db".to_string());
 
         let stake_wqc = env::var("WQC_NODE_STAKE_WQC").unwrap_or_else(|_| "0.05".to_string());
-        let stake_amount = crate::domain::token::parse_wqc_to_planck(&stake_wqc)
-            .with_context(|| format!("WQC_NODE_STAKE_WQC must be a valid WQC amount, got {stake_wqc:?}"))?;
+        let stake_amount =
+            crate::domain::token::parse_wqc_to_planck(&stake_wqc).with_context(|| {
+                format!("WQC_NODE_STAKE_WQC must be a valid WQC amount, got {stake_wqc:?}")
+            })?;
 
         tracing::info!(
             "Node Config Loaded: WQC memory budget = {:.2} GiB (requested {:.2} GiB, host total {} KiB) → max_qubits = {}, compute timeout = {}s",
@@ -103,27 +107,25 @@ impl NodeConfig {
             compute_timeout_secs
         );
         tracing::info!("Node libp2p PeerID: {}", peer_id);
-        tracing::info!(
-            "Node bid stake: {} WQC ({} pWQC)",
-            stake_wqc,
-            stake_amount
-        );
+        tracing::info!("Node bid stake: {} WQC ({} pWQC)", stake_wqc, stake_amount);
 
-        let (operator_id, operator_signing_key) =
-            match env::var("WQC_TESTNET_NODE_KEY") {
-                Ok(node_key) if !node_key.trim().is_empty() => {
-                    let (operator_id, key) =
-                        crate::domain::operator::derive_operator_keypair(node_key.trim())?;
-                    tracing::info!("Operator ID loaded from WQC_TESTNET_NODE_KEY: {}", operator_id);
-                    (Some(operator_id), Some(key))
-                }
-                _ => {
-                    tracing::warn!(
+        let (operator_id, operator_signing_key) = match env::var("WQC_TESTNET_NODE_KEY") {
+            Ok(node_key) if !node_key.trim().is_empty() => {
+                let (operator_id, key) =
+                    crate::domain::operator::derive_operator_keypair(node_key.trim())?;
+                tracing::info!(
+                    "Operator ID loaded from WQC_TESTNET_NODE_KEY: {}",
+                    operator_id
+                );
+                (Some(operator_id), Some(key))
+            }
+            _ => {
+                tracing::warn!(
                         "WQC_TESTNET_NODE_KEY is not set; bids will be rejected (operator signature required)"
                     );
-                    (None, None)
-                }
-            };
+                (None, None)
+            }
+        };
 
         Ok(Self {
             peer_id,

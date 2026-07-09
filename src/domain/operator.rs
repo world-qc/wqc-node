@@ -32,9 +32,8 @@ pub fn serialize_operator_bid_payload(
     stake_amount: &num_bigint::BigInt,
 ) -> Vec<u8> {
     let stake = stake_amount.to_string();
-    let mut payload = Vec::with_capacity(
-        operator_id.len() + node_id.len() + task_id.len() + stake.len(),
-    );
+    let mut payload =
+        Vec::with_capacity(operator_id.len() + node_id.len() + task_id.len() + stake.len());
     payload.extend_from_slice(operator_id.as_bytes());
     payload.extend_from_slice(node_id.as_bytes());
     payload.extend_from_slice(task_id.as_bytes());
@@ -79,8 +78,7 @@ mod tests {
 
     #[test]
     fn derive_operator_keypair_golden_vector() {
-        let (operator_id, key) =
-            derive_operator_keypair("nk_crosslang_test_vector").unwrap();
+        let (operator_id, key) = derive_operator_keypair("nk_crosslang_test_vector").unwrap();
         assert_eq!(
             operator_id,
             "ffd5bedd67236d70d73de1ebb588fe1701068af1eb7f7754e3fcc850df70d01b"
@@ -106,9 +104,6 @@ mod tests {
         let payload =
             serialize_operator_bid_payload(&operator_id, "12D3KooWTest", "task-1", &stake);
         let sig = key.sign(&payload);
-        assert!(key
-            .verifying_key()
-            .verify_strict(&payload, &sig)
-            .is_ok());
+        assert!(key.verifying_key().verify_strict(&payload, &sig).is_ok());
     }
 }

@@ -13,7 +13,10 @@ pub async fn sync_core_capabilities(core_client: Arc<WqcCoreClient>) -> Vec<Stri
             gates
         }
         Err(e) => {
-            tracing::error!("Failed to sync core capabilities: {}. Using default gates.", e);
+            tracing::error!(
+                "Failed to sync core capabilities: {}. Using default gates.",
+                e
+            );
             default_gates()
         }
     }

@@ -91,10 +91,7 @@ pub fn format_go_sample_result_json(value: &SampleResult) -> String {
         }
         counts_pairs.push_str(&format!(r#""{key}":{count}"#));
     }
-    format!(
-        r#"{{"counts":{{{counts_pairs}}},"shots":{}}}"#,
-        value.shots
-    )
+    format!(r#"{{"counts":{{{counts_pairs}}},"shots":{}}}"#, value.shots)
 }
 
 /// Matches orchestrator `ComplexResult.MarshalJSON` for hash verification.

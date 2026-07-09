@@ -55,7 +55,7 @@ impl BidClient {
             supported_features,
             location,
         )
-            .ok_or_else(|| anyhow::anyhow!("failed to mine lottery proof within time window"))?;
+        .ok_or_else(|| anyhow::anyhow!("failed to mine lottery proof within time window"))?;
 
         let payload = serde_json::to_vec(&signed_bid)?;
         const MAX_ATTEMPTS: u32 = 3;
@@ -98,7 +98,6 @@ impl BidClient {
         );
         Ok(())
     }
-
 }
 
 /// Drain unsolicited inbound streams on the bid protocol.

@@ -14,7 +14,9 @@ use tokio::time::Sleep;
 use crate::application::state::AppState;
 use crate::config::{libp2p_keypair_from_signing_key, NodeConfig};
 use crate::domain::bid;
-use crate::domain::p2p::{parse_signed_announcement, ANNOUNCEMENT_TOPIC, PROTOCOL_ANNOUNCE, PROTOCOL_DISPATCH};
+use crate::domain::p2p::{
+    parse_signed_announcement, ANNOUNCEMENT_TOPIC, PROTOCOL_ANNOUNCE, PROTOCOL_DISPATCH,
+};
 use crate::domain::result::PROTOCOL_RESULT;
 use crate::transport::p2p::announce_handler::spawn_announce_handler;
 use crate::transport::p2p::bid_client::{spawn_incoming_stream_sink, BidClient};
@@ -119,10 +121,7 @@ fn unsubscribe_orchestrator_announcements(swarm: &mut Swarm<NodeBehaviour>, topi
     }
 }
 
-fn schedule_bootstrap_redial(
-    attempt: u32,
-    sleep: &mut Option<Pin<Box<Sleep>>>,
-) {
+fn schedule_bootstrap_redial(attempt: u32, sleep: &mut Option<Pin<Box<Sleep>>>) {
     let delay = bootstrap_redial_delay(attempt);
     tracing::info!(
         "[P2P] Scheduling bootstrap redial in {:?} (attempt {})",
@@ -298,6 +297,7 @@ async fn run(config: NodeConfig, state: Arc<AppState>) -> anyhow::Result<()> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle_swarm_event(
     event: SwarmEvent<NodeBehaviourEvent>,
     swarm: &mut Swarm<NodeBehaviour>,
@@ -310,18 +310,20 @@ fn handle_swarm_event(
     redial_sleep: &mut Option<Pin<Box<Sleep>>>,
 ) {
     match event {
-        SwarmEvent::Behaviour(NodeBehaviourEvent::Gossipsub(
-            gossipsub::Event::Subscribed { peer_id, topic: subscribed_topic },
-        )) => {
+        SwarmEvent::Behaviour(NodeBehaviourEvent::Gossipsub(gossipsub::Event::Subscribed {
+            peer_id,
+            topic: subscribed_topic,
+        })) => {
             tracing::info!(
                 "[P2P Gossip] Peer {} subscribed to {}",
                 peer_id,
                 subscribed_topic
             );
         }
-        SwarmEvent::Behaviour(NodeBehaviourEvent::Gossipsub(
-            gossipsub::Event::Message { message, .. },
-        )) => {
+        SwarmEvent::Behaviour(NodeBehaviourEvent::Gossipsub(gossipsub::Event::Message {
+            message,
+            ..
+        })) => {
             let Some(orchestrator_pubkey) = config.orchestrator_public_key.as_deref() else {
                 tracing::warn!(
                     "[P2P Gossip] Ignoring announcement on {}: orchestrator public key not configured",
@@ -395,14 +397,16 @@ fn handle_swarm_event(
                 schedule_bootstrap_redial(*redial_attempt, redial_sleep);
             }
         }
-        SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
-            if peer_id == Some(orchestrator_peer_id) {
-                tracing::warn!(
-                    "[P2P] Outgoing connection to orchestrator failed: {}",
-                    error
-                );
-                schedule_bootstrap_redial(*redial_attempt, redial_sleep);
-            }
+        SwarmEvent::OutgoingConnectionError {
+            peer_id: Some(peer_id),
+            error,
+            ..
+        } if peer_id == orchestrator_peer_id => {
+            tracing::warn!(
+                "[P2P] Outgoing connection to orchestrator failed: {}",
+                error
+            );
+            schedule_bootstrap_redial(*redial_attempt, redial_sleep);
         }
         _ => {}
     }

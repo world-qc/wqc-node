@@ -5,7 +5,9 @@ use tokio::sync::mpsc;
 
 use crate::application::ports::ResultSink;
 use crate::application::state::AppState;
-use crate::domain::models::{ComplexResult, ComputeRequest, ComputeTask, ExpectationResult, SampleResult, TaskResultPayload};
+use crate::domain::models::{
+    ComplexResult, ComputeRequest, ComputeTask, ExpectationResult, SampleResult, TaskResultPayload,
+};
 use crate::infra::core_client::WqcCoreClient;
 
 struct TaskResultData {
@@ -30,11 +32,7 @@ pub async fn start_worker(
     }
 }
 
-async fn process_task(
-    state: Arc<AppState>,
-    result_sink: Arc<dyn ResultSink>,
-    task: ComputeTask,
-) {
+async fn process_task(state: Arc<AppState>, result_sink: Arc<dyn ResultSink>, task: ComputeTask) {
     let task_id = task.request.task_id.clone();
     let pubkey = task.orchestrator_pubkey.clone();
 
@@ -70,9 +68,18 @@ async fn process_task(
         }
     };
 
-    let status = if payload.status == "error" { "failed" } else { "completed" };
+    let status = if payload.status == "error" {
+        "failed"
+    } else {
+        "completed"
+    };
     if let Err(e) = state.storage.update_status(&pubkey, &task_id, status) {
-        tracing::error!("Storage update failed for task {} owned by {}: {}", task_id, pubkey, e);
+        tracing::error!(
+            "Storage update failed for task {} owned by {}: {}",
+            task_id,
+            pubkey,
+            e
+        );
     }
 
     if let Err(e) = result_sink.send_result(&task, payload).await {

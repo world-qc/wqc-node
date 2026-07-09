@@ -58,10 +58,7 @@ pub fn resolve_max_qubits_from_memory_gb(
 ) -> (usize, f64) {
     let bytes = effective_memory_bytes(requested_gib, total_physical_bytes);
     let effective_gib = bytes as f64 / GIB;
-    (
-        max_qubits_from_dense_memory_budget(bytes),
-        effective_gib,
-    )
+    (max_qubits_from_dense_memory_budget(bytes), effective_gib)
 }
 
 #[cfg(test)]

@@ -82,9 +82,8 @@ impl Storage {
         task_id: &str,
     ) -> anyhow::Result<Option<ComputeTask>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT payload FROM tasks WHERE orchestrator_pubkey = ?1 AND task_id = ?2",
-        )?;
+        let mut stmt = conn
+            .prepare("SELECT payload FROM tasks WHERE orchestrator_pubkey = ?1 AND task_id = ?2")?;
 
         let mut rows = stmt.query(params![orchestrator_pubkey, task_id])?;
         if let Some(row) = rows.next()? {
@@ -186,9 +185,8 @@ impl Storage {
 
     pub fn count_pending_results(&self) -> anyhow::Result<usize> {
         let conn = self.conn.lock().unwrap();
-        let count: i64 = conn.query_row("SELECT COUNT(*) FROM pending_results", [], |row| {
-            row.get(0)
-        })?;
+        let count: i64 =
+            conn.query_row("SELECT COUNT(*) FROM pending_results", [], |row| row.get(0))?;
         Ok(count as usize)
     }
 

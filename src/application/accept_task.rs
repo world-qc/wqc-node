@@ -4,8 +4,8 @@ use std::sync::Arc;
 use crate::application::ports::TaskIngress;
 use crate::application::state::AppState;
 use crate::domain::models::{ComputeRequest, ComputeTask};
-use crate::domain::validation::validate_circuit_logic;
 use crate::domain::validation::normalize_gate_params;
+use crate::domain::validation::validate_circuit_logic;
 
 fn dispatch_payload_matches(existing: &ComputeTask, incoming: &ComputeTask) -> bool {
     if existing.orchestrator_pubkey != incoming.orchestrator_pubkey {
@@ -15,7 +15,10 @@ fn dispatch_payload_matches(existing: &ComputeTask, incoming: &ComputeTask) -> b
     let mut incoming_req = incoming.request.clone();
     existing_req.node_id = None;
     incoming_req.node_id = None;
-    match (serde_json::to_vec(&existing_req), serde_json::to_vec(&incoming_req)) {
+    match (
+        serde_json::to_vec(&existing_req),
+        serde_json::to_vec(&incoming_req),
+    ) {
         (Ok(a), Ok(b)) => a == b,
         _ => false,
     }
@@ -62,8 +65,12 @@ pub async fn accept_compute_task(
         ));
     }
 
-    validate_circuit_logic(&request.circuit, request.qubit_count, &state.supported_gates)
-        .map_err(AcceptTaskError::Validation)?;
+    validate_circuit_logic(
+        &request.circuit,
+        request.qubit_count,
+        &state.supported_gates,
+    )
+    .map_err(AcceptTaskError::Validation)?;
 
     normalize_gate_params(&mut request.circuit);
     request.node_id = Some(state.config.peer_id.clone());
@@ -90,8 +97,9 @@ pub async fn accept_compute_task(
 
     if let Err(e) = state.storage.save_task(&task) {
         if is_unique_violation(&e) {
-            if let Ok(Some(existing)) =
-                state.storage.load_task(orchestrator_pubkey, &task.request.task_id)
+            if let Ok(Some(existing)) = state
+                .storage
+                .load_task(orchestrator_pubkey, &task.request.task_id)
             {
                 if dispatch_payload_matches(&existing, &task) {
                     log_duplicate_dispatch(&task.request.task_id);

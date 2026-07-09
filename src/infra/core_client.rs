@@ -66,7 +66,11 @@ impl WqcCoreClient {
             }
             status => {
                 let error_text = response.text().await.unwrap_or_default();
-                anyhow::bail!("wqc-core returned error status: {} - {}", status, error_text);
+                anyhow::bail!(
+                    "wqc-core returned error status: {} - {}",
+                    status,
+                    error_text
+                );
             }
         }
     }

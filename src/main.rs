@@ -10,10 +10,7 @@ mod transport;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 
-use axum::{
-    routing::get,
-    Json, Router,
-};
+use axum::{routing::get, Json, Router};
 use colored::*;
 use sysinfo::{MemoryRefreshKind, RefreshKind, System};
 use tokio::sync::mpsc;
@@ -49,10 +46,9 @@ async fn main() -> anyhow::Result<()> {
     let storage = infra::storage::Storage::new(&config.database_url)?;
     let http_client = geo::build_geo_http_client();
 
-    let bootstrap =
-        infra::orchestrator::resolve_bootstrap(&http_client, &config.bootstrap_urls)
-            .await
-            .context("failed to resolve orchestrator P2P bootstrap over HTTP")?;
+    let bootstrap = infra::orchestrator::resolve_bootstrap(&http_client, &config.bootstrap_urls)
+        .await
+        .context("failed to resolve orchestrator P2P bootstrap over HTTP")?;
     config
         .apply_orchestrator_bootstrap(bootstrap)
         .context("invalid orchestrator bootstrap payload")?;
@@ -90,11 +86,7 @@ async fn main() -> anyhow::Result<()> {
     let result_sink: Arc<dyn application::ports::ResultSink> =
         Arc::new(P2pResultSink::new(shared_state.clone()));
 
-    tokio::spawn(worker::start_worker(
-        shared_state.clone(),
-        result_sink,
-        rx,
-    ));
+    tokio::spawn(worker::start_worker(shared_state.clone(), result_sink, rx));
 
     p2p::host::spawn(config.clone(), shared_state.clone());
 
@@ -185,11 +177,7 @@ fn print_startup_banner(
     print_geo_line(node_geo);
 
     println!();
-    println!(
-        "  {} {}",
-        "➜".bright_yellow(),
-        "Node libp2p PeerID:".bold()
-    );
+    println!("  {} {}", "➜".bright_yellow(), "Node libp2p PeerID:".bold());
     println!("    {}", config.peer_id.underline().bright_cyan());
     println!(
         "  {} {}",
@@ -207,20 +195,12 @@ fn print_startup_banner(
         );
         println!("    {}", peer.to_string().underline().bright_cyan());
     }
-    println!(
-        "  {} {}",
-        "➜".bright_yellow(),
-        "P2P listen port:".bold()
-    );
+    println!("  {} {}", "➜".bright_yellow(), "P2P listen port:".bold());
     println!(
         "    {}",
         config.p2p_listen_port.to_string().underline().bright_cyan()
     );
-    println!(
-        "  {} {}",
-        "➜".bright_yellow(),
-        "HTTP admin API:".bold()
-    );
+    println!("  {} {}", "➜".bright_yellow(), "HTTP admin API:".bold());
     println!(
         "    {}",
         format!("http://0.0.0.0:{}", config.http_port)

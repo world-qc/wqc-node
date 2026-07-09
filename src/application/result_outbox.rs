@@ -106,10 +106,10 @@ pub fn spawn_retry_loop(state: Arc<AppState>) {
             for entry in pending {
                 match send_result_wire(state.clone(), &entry.wire_body).await {
                     Ok(()) => {
-                        if let Err(e) = state.storage.delete_pending_result(
-                            &entry.orchestrator_pubkey,
-                            &entry.sub_task_id,
-                        ) {
+                        if let Err(e) = state
+                            .storage
+                            .delete_pending_result(&entry.orchestrator_pubkey, &entry.sub_task_id)
+                        {
                             tracing::error!(
                                 "[Result Outbox] Failed to delete delivered sub_task_id={}: {}",
                                 entry.sub_task_id,
@@ -124,9 +124,8 @@ pub fn spawn_retry_loop(state: Arc<AppState>) {
                         }
                     }
                     Err(e) => {
-                        if let Err(inc_err) = state
-                            .storage
-                            .increment_pending_result_attempts(entry.id)
+                        if let Err(inc_err) =
+                            state.storage.increment_pending_result_attempts(entry.id)
                         {
                             tracing::error!(
                                 "[Result Outbox] Failed to increment attempts for sub_task_id={}: {}",

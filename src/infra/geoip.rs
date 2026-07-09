@@ -6,10 +6,7 @@ use crate::domain::geo::{fetch_geolocation, GeoInfo};
 use crate::infra::storage::Storage;
 
 /// Load from 24h SQLite cache, or fetch via provider fallback chain and persist.
-pub async fn resolve_node_location(
-    storage: &Storage,
-    client: &Client,
-) -> Option<GeoInfo> {
+pub async fn resolve_node_location(storage: &Storage, client: &Client) -> Option<GeoInfo> {
     match storage.get_cached_geo() {
         Ok(Some(cached)) => {
             tracing::info!(

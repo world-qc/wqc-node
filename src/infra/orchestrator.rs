@@ -52,9 +52,8 @@ pub async fn resolve_bootstrap(
         }
     }
 
-    Err(last_err.unwrap_or_else(|| {
-        anyhow::anyhow!("no bootstrap URLs provided in WQC_BOOTSTRAP_URLS")
-    }))
+    Err(last_err
+        .unwrap_or_else(|| anyhow::anyhow!("no bootstrap URLs provided in WQC_BOOTSTRAP_URLS")))
 }
 
 async fn fetch_bootstrap(client: &Client, endpoint: &str) -> anyhow::Result<OrchestratorBootstrap> {

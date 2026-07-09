@@ -25,10 +25,7 @@ impl ResultSink for P2pResultSink {
         payload: TaskResultPayload,
     ) -> anyhow::Result<()> {
         if payload.status != "success" {
-            let error = payload
-                .error
-                .as_deref()
-                .unwrap_or("compute failed");
+            let error = payload.error.as_deref().unwrap_or("compute failed");
             tracing::warn!(
                 "[P2P Result] Reporting compute failure for sub_task_id={}: {}",
                 payload.task_id,

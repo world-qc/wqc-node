@@ -44,7 +44,10 @@ fn validate_gate(
     supported_gates: &[String],
 ) -> Result<(), String> {
     if !supported_gates.contains(&gate.r#type) {
-        return Err(format!("Gate '{}' at index {} not supported", gate.r#type, idx));
+        return Err(format!(
+            "Gate '{}' at index {} not supported",
+            gate.r#type, idx
+        ));
     }
 
     if gate.r#type == "IF" {
@@ -63,7 +66,10 @@ fn validate_gate(
         for p in params {
             if let Some(q_idx) = p.as_u64() {
                 if q_idx as usize >= qubit_count {
-                    return Err(format!("Qubit index {} out of range at gate {}", q_idx, idx));
+                    return Err(format!(
+                        "Qubit index {} out of range at gate {}",
+                        q_idx, idx
+                    ));
                 }
             }
         }

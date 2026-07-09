@@ -34,7 +34,10 @@ pub struct Bid {
     pub location: Option<GeoInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub operator_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none", serialize_with = "serialize_optional_bytes_as_base64")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "serialize_optional_bytes_as_base64"
+    )]
     pub operator_sig: Option<Vec<u8>>,
 }
 
@@ -68,8 +71,11 @@ pub fn build_signed_bid(
     let operator_id = config.operator_id.clone()?;
     let operator_signing_key = config.operator_signing_key.as_ref()?;
 
-    let (timestamp, lottery_attempt, lottery_proof) =
-        mine_lottery(&config.peer_id, announcement.nonce, announcement.bid_difficulty)?;
+    let (timestamp, lottery_attempt, lottery_proof) = mine_lottery(
+        &config.peer_id,
+        announcement.nonce,
+        announcement.bid_difficulty,
+    )?;
 
     let bid = Bid {
         task_id: announcement.task_id.clone(),
@@ -90,12 +96,8 @@ pub fn build_signed_bid(
     let payload = serialize_bid_payload(&bid);
     let signature = config.signing_key.sign(&payload).to_bytes().to_vec();
 
-    let operator_payload = serialize_operator_bid_payload(
-        &operator_id,
-        &bid.node_id,
-        &bid.task_id,
-        &bid.stake_amount,
-    );
+    let operator_payload =
+        serialize_operator_bid_payload(&operator_id, &bid.node_id, &bid.task_id, &bid.stake_amount);
     let operator_sig = operator_signing_key
         .sign(&operator_payload)
         .to_bytes()
@@ -314,9 +316,9 @@ mod tests {
         assert_eq!(
             hash,
             [
-                0x6e, 0x53, 0xa4, 0x11, 0x24, 0xed, 0x5c, 0xa6, 0xbc, 0x0c, 0x82, 0xb4, 0xd9,
-                0x27, 0x12, 0x4a, 0x7f, 0xb6, 0xd0, 0x8f, 0xa4, 0x23, 0xb3, 0xe5, 0x05, 0x08,
-                0x9c, 0x8a, 0x8f, 0xa6, 0x65, 0xb2,
+                0x6e, 0x53, 0xa4, 0x11, 0x24, 0xed, 0x5c, 0xa6, 0xbc, 0x0c, 0x82, 0xb4, 0xd9, 0x27,
+                0x12, 0x4a, 0x7f, 0xb6, 0xd0, 0x8f, 0xa4, 0x23, 0xb3, 0xe5, 0x05, 0x08, 0x9c, 0x8a,
+                0x8f, 0xa6, 0x65, 0xb2,
             ]
         );
     }

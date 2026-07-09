@@ -53,16 +53,10 @@ async fn handle_dispatch_stream(
         .as_deref()
         .ok_or_else(|| anyhow::anyhow!("orchestrator public key not configured"))?;
 
-    verify_dispatch_signature(
-        &message.sub_task,
-        &message.signature,
-        orchestrator_pubkey,
-    )
-    .map_err(|e| anyhow::anyhow!("dispatch rejected: {e}"))?;
+    verify_dispatch_signature(&message.sub_task, &message.signature, orchestrator_pubkey)
+        .map_err(|e| anyhow::anyhow!("dispatch rejected: {e}"))?;
 
-    let request = message
-        .sub_task
-        .into_compute_request(&config.peer_id);
+    let request = message.sub_task.into_compute_request(&config.peer_id);
 
     accept_task::accept_compute_task(&state, request, orchestrator_pubkey)
         .await
