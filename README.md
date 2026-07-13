@@ -88,7 +88,7 @@ cargo run --release
 
 ### Docker (devnet)
 
-See `world-qc-docker/wqc/compose.yml` for a five-node layout. Typical node env:
+See `world-qc-docker/devnet/compose.yml` for a five-node layout. Typical node env:
 
 ```yaml
 WQC_NODE_PRIVATE_KEY: <unique per node>
@@ -103,7 +103,7 @@ WQC_P2P_LISTEN_PORT: "4002"
 Build and run:
 
 ```bash
-docker compose -f world-qc-docker/wqc/compose.yml up wqc-node-01
+docker compose -f world-qc-docker/devnet/compose.yml up wqc-node-01
 ```
 
 ## Environment Variables
@@ -115,7 +115,7 @@ docker compose -f world-qc-docker/wqc/compose.yml up wqc-node-01
 | `WQC_CORE_URL` | no | `http://localhost:3000` | `wqc-core` base URL or `unix:/path/to.sock`. |
 | `WQC_NODE_STAKE_WQC` | no | `0.05` | Human WQC amount sent as `stake_amount` (Planck integer on wire). |
 | `WQC_TESTNET_NODE_KEY` | testnet | — | Node Key from [testnet.world-qc.io](https://testnet.world-qc.io). Derives `operator_id` and signs `operator_sig` on bids. Required on public testnet. |
-| `WQC_MAX_MEMORY_GB` | no | `16` | WQC memory budget (GiB). Capped at 80% of host RAM. Derives `max_qubit_capability` as `floor(log2(budget / 16))` (dense `2^n × 16` envelope). |
+| `WQC_MAX_MEMORY_GB` | no | `16` | WQC memory budget (GiB). Capped at host RAM minus 1/2 GiB reserve (`memory_budget.rs`). Derives `max_qubit_capability` as `floor(log2(budget / 16))` (dense `2^n × 16` envelope). |
 | `WQC_COMPUTE_TIMEOUT_SECS` | no | `300` | Timeout for `POST /compute` to core. |
 | `WQC_P2P_LISTEN_PORT` | no | `4002` | TCP/QUIC listen port for libp2p. |
 | `WQC_HTTP_PORT` | no | `8080` | Admin API bind port. |

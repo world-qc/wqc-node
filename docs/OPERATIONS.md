@@ -83,7 +83,7 @@ cargo run --release
 | :--- | :--- | :--- |
 | `WQC_NODE_STAKE_WQC` | `0.05` | Parsed to Planck (pWQC) for bid `stake_amount`. Up to 18 fractional digits. |
 | `WQC_TESTNET_NODE_KEY` | — | **Public testnet:** Node Key from the dashboard (`nk_…`). Derives operator identity and `operator_sig` on bids. Without it, bids are rejected. |
-| `WQC_MAX_MEMORY_GB` | `16` | WQC memory budget (GiB), capped at 80% of physical RAM. Derives max qubits (`2^n × 16` bytes). Nodes with `< 10` max qubits never bid (`NETWORK_MIN_QUBITS`). |
+| `WQC_MAX_MEMORY_GB` | `16` | WQC memory budget (GiB), capped at **host total − reserve** (1 GiB if host < 16 GiB, else 2 GiB; see `memory_budget.rs`). Derives max qubits (`2^n × 16` bytes). Nodes with `< 10` max qubits never bid (`NETWORK_MIN_QUBITS`). |
 | `WQC_COMPUTE_TIMEOUT_SECS` | `300` | Per-request timeout to core. |
 | `WQC_DATABASE_URL` | `sqlite:wqc-node.db` | Relative path is under the process working directory. |
 | `WQC_P2P_LISTEN_PORT` | `4002` | Bind `0.0.0.0` on TCP and QUIC. |
@@ -95,7 +95,7 @@ cargo run --release
 
 `WQC_MAX_MEMORY_GB` is the main participant-facing sizing knob.
 
-- The node first caps the requested budget at **80% of physical RAM**
+- The node caps the requested budget at **host physical RAM minus a reserve** (1 GiB on hosts under 16 GiB total, otherwise 2 GiB) — not a flat 80% rule
 - It then derives `max_qubits` from the dense envelope `2^n × 16` bytes
 - That derived value is what the node advertises to the orchestrator
 
@@ -105,6 +105,8 @@ Examples:
 - `16 GiB` budget → about `30` qubits
 
 If your node never bids, an overly small effective memory budget is one of the first things to check.
+
+Signoff drill (devnet multi-node scrape): `wqc-docs/examples/e2e/signoff/06_memory_budget.sh`.
 
 ## Lifecycle
 
@@ -147,6 +149,8 @@ If those appear, the node is usually ready to receive announcements and submit b
 
 Completed/failed `tasks` rows are not pruned automatically.
 
+Devnet signoff drill: `wqc-docs/examples/e2e/signoff/03_node_restart.sh` (records `/status` `pending_tasks` / `outbox_pending` around `docker restart`).
+
 ## First checks after startup
 
 ```bash
@@ -164,7 +168,7 @@ Pay attention to:
 
 ## Docker compose (devnet)
 
-Reference: `world-qc-docker/wqc/compose.yml`
+Reference: `world-qc-docker/devnet/compose.yml`
 
 - Five nodes (`wqc-node-01` … `05`), each with a unique `WQC_NODE_PRIVATE_KEY` and SQLite file.
 - Shared bootstrap URL `http://wqc-orchestrator-01:9000/api/v1/p2p/bootstrap`; orchestrator advertises P2P on `10.20.3.11:4001`.
@@ -174,8 +178,8 @@ Reference: `world-qc-docker/wqc/compose.yml`
 Rebuild after code changes:
 
 ```bash
-docker compose -f world-qc-docker/wqc/compose.yml build wqc-node-01
-docker compose -f world-qc-docker/wqc/compose.yml up -d wqc-node-01
+docker compose -f world-qc-docker/devnet/compose.yml build wqc-node-01
+docker compose -f world-qc-docker/devnet/compose.yml up -d wqc-node-01
 ```
 
 ## Health checks
