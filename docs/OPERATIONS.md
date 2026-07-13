@@ -20,7 +20,7 @@ Before starting a node, confirm all of the following:
 | Process | Default port | Role |
 | :--- | :--- | :--- |
 | `wqc-node` libp2p | `4002` (`WQC_P2P_LISTEN_PORT`) | Swarm traffic (TCP + QUIC) |
-| `wqc-node` HTTP | `8080` (`WQC_HTTP_PORT`) | Admin only (`/health`, `/status`) |
+| `wqc-node` HTTP | `8080` (`WQC_HTTP_PORT`) | Admin: `/health`, `/status`, **`/metrics`** |
 | `wqc-core` | `3000` or unix socket | Circuit simulation + STARK proving |
 | `wqc-orchestrator` libp2p | `4001` | Bootstrap peer for nodes |
 
@@ -156,6 +156,7 @@ Devnet signoff drill: `wqc-docs/examples/e2e/signoff/03_node_restart.sh` (record
 ```bash
 curl -s "http://localhost:8080/health"
 curl -s "http://localhost:8080/status" | jq .
+curl -s "http://localhost:8080/metrics" | head
 ```
 
 Pay attention to:
@@ -188,6 +189,7 @@ docker compose -f world-qc-docker/devnet/compose.yml up -d wqc-node-01
 # Admin API
 curl -s "http://localhost:8080/health"
 curl -s "http://localhost:8080/status" | jq .
+curl -s "http://localhost:8080/metrics" | grep '^wqc_node_'
 
 # Logs: confirm P2P listen + orchestrator connect
 #   P2P host started (peer_id=..., listen_port=4002)
@@ -197,10 +199,32 @@ curl -s "http://localhost:8080/status" | jq .
 Useful interpretations:
 
 - `health=UP` but no bids: usually capability mismatch, bootstrap issues, or no incoming tasks
-- rising `outbox_pending`: compute succeeded but result delivery is retrying
-- rising `pending_tasks`: core is slow, stuck, or timing out
+- rising `outbox_pending` / `wqc_node_outbox_pending`: compute succeeded but result delivery is retrying
+- rising `pending_tasks` / `wqc_node_pending_tasks`: core is slow, stuck, or timing out
+- `wqc_node_p2p_orchestrator_connected == 0`: bootstrap / dial failure
+- rising `wqc_node_core_timeouts_total`: raise `WQC_COMPUTE_TIMEOUT_SECS` or check core load
 
-## Economics (orchestrator-side)
+## Prometheus metrics
+
+### Public / testnet path (orchestrator aggregation)
+
+Each bid may include an unsigned `metrics_summary`. After the orchestrator accepts the bid it updates gauges on **`wqc-orchestrator:/metrics`** (already scraped by testnet Prometheus):
+
+| Metric | Meaning |
+| :--- | :--- |
+| `wqc_orchestrator_node_pending_tasks{node_id}` | In-flight / queued sub-tasks |
+| `wqc_orchestrator_node_outbox_pending{node_id}` | Result outbox depth |
+| `wqc_orchestrator_node_p2p_connected_peers{node_id}` | Live libp2p connections |
+| `wqc_orchestrator_node_p2p_orchestrator_connected{node_id}` | `1` if node believed it was linked |
+| `wqc_orchestrator_node_core_timeouts_total{node_id}` | Process-lifetime core timeout count (snapshot) |
+| `wqc_orchestrator_node_uptime_seconds{node_id}` | Node process uptime |
+| `wqc_orchestrator_node_metrics_age_seconds{node_id}` | Seconds since last accepted summary |
+
+Values only refresh when the node wins/submits another bid, so watch `metrics_age_seconds` for staleness.
+
+### Local node exporter (optional)
+
+`GET /metrics` on the admin HTTP port (default `8080`) still exposes the full `wqc_node_*` catalog for local debugging. Devnet may scrape `wqc-node-*:8080` directly; public miners should not need to expose this port.
 
 The node only declares stake in bids. Balance, rewards, and burns are handled by the orchestrator Redis ledger. See `wqc-orchestrator/docs/ECONOMICS.md`.
 

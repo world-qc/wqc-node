@@ -48,12 +48,14 @@ impl BidClient {
         let current_load = self.state.pending_tasks.load(Ordering::Relaxed) as u32;
         let location =
             geoip::resolve_node_location(&self.state.storage, &self.state.http_client).await;
+        let metrics_summary = Some(crate::infra::metrics::snapshot_for_bid(&self.state));
         let signed_bid = bid::build_signed_bid(
             &announcement,
             &self.config,
             current_load,
             supported_features,
             location,
+            metrics_summary,
         )
         .ok_or_else(|| anyhow::anyhow!("failed to mine lottery proof within time window"))?;
 

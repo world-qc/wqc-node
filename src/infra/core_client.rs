@@ -46,15 +46,23 @@ impl WqcCoreClient {
 
     pub async fn dispatch_task(&self, request: ComputeRequest) -> Result<ComputeResponse> {
         let url = format!("{}/compute", self.base_url);
+        let started = std::time::Instant::now();
 
-        let response = self
+        let response = match self
             .client
             .post(&url)
             .timeout(self.compute_timeout)
             .json(&request)
             .send()
             .await
-            .context("Failed to send request to wqc-core")?;
+        {
+            Ok(response) => response,
+            Err(e) => {
+                let timed_out = e.is_timeout();
+                crate::infra::metrics::record_core_error(timed_out);
+                return Err(e).context("Failed to send request to wqc-core");
+            }
+        };
 
         match response.status() {
             StatusCode::OK => {
@@ -62,15 +70,20 @@ impl WqcCoreClient {
                     .json::<ComputeResponse>()
                     .await
                     .context("Failed to parse success response body")?;
+                crate::infra::metrics::record_core_success(
+                    started.elapsed(),
+                    res_body.work_report.as_ref(),
+                );
                 Ok(res_body)
             }
             status => {
+                crate::infra::metrics::record_core_error(false);
                 let error_text = response.text().await.unwrap_or_default();
                 anyhow::bail!(
                     "wqc-core returned error status: {} - {}",
                     status,
                     error_text
-                );
+                )
             }
         }
     }

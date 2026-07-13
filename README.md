@@ -153,7 +153,7 @@ Task ingress and results use **P2P only**—there is no `/submit` or webhook end
 ### Phase 2 — Operations & execution model
 
 - [x] **Phase A (§3.4)**: forward `output_mode`, `shots`, `classical_bit_count`, `sample_seed`; return `sample_result` on P2P
-- [ ] Prometheus metrics (`/status` is available today)
+- [x] Prometheus metrics (`GET /metrics` on the admin HTTP port)
 - [ ] Hardware tuning via `wqc-core` (CPU/GPU is a core concern)
 
 ### Phase 3 — Sovereign Network

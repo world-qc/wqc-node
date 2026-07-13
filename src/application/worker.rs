@@ -73,6 +73,11 @@ async fn process_task(state: Arc<AppState>, result_sink: Arc<dyn ResultSink>, ta
     } else {
         "completed"
     };
+    crate::infra::metrics::record_task_status(if payload.status == "error" {
+        "error"
+    } else {
+        "success"
+    });
     if let Err(e) = state.storage.update_status(&pubkey, &task_id, status) {
         tracing::error!(
             "Storage update failed for task {} owned by {}: {}",

@@ -33,6 +33,7 @@ use transport::p2p::result_sink::P2pResultSink;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
+    infra::metrics::init();
 
     let mut config = NodeConfig::from_env()?;
 
@@ -91,9 +92,11 @@ async fn main() -> anyhow::Result<()> {
     p2p::host::spawn(config.clone(), shared_state.clone());
 
     application::result_outbox::spawn_retry_loop(shared_state.clone());
+    infra::metrics::spawn_collector(shared_state.clone());
 
     let app = Router::new()
         .route("/status", get(handlers::get_status))
+        .route("/metrics", get(infra::metrics::metrics_handler))
         .route(
             "/health",
             get(|| async { Json(serde_json::json!({ "status": "UP" })) }),
@@ -204,6 +207,13 @@ fn print_startup_banner(
     println!(
         "    {}",
         format!("http://0.0.0.0:{}", config.http_port)
+            .underline()
+            .bright_cyan()
+    );
+    println!("  {} {}", "➜".bright_yellow(), "Prometheus metrics:".bold());
+    println!(
+        "    {}",
+        format!("http://0.0.0.0:{}/metrics", config.http_port)
             .underline()
             .bright_cyan()
     );

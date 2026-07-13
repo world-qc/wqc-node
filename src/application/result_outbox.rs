@@ -53,6 +53,7 @@ async fn try_deliver_pending(
             state
                 .storage
                 .delete_pending_result(orchestrator_pubkey, sub_task_id)?;
+            crate::infra::metrics::record_result_delivery("initial", "ok");
             tracing::info!(
                 "[Result Outbox] Delivered sub_task_id={} to orchestrator",
                 sub_task_id
@@ -60,6 +61,7 @@ async fn try_deliver_pending(
             Ok(())
         }
         Err(e) => {
+            crate::infra::metrics::record_result_delivery("initial", "error");
             tracing::warn!(
                 "[Result Outbox] Delivery failed for sub_task_id={} (queued for retry): {}",
                 sub_task_id,
@@ -106,6 +108,7 @@ pub fn spawn_retry_loop(state: Arc<AppState>) {
             for entry in pending {
                 match send_result_wire(state.clone(), &entry.wire_body).await {
                     Ok(()) => {
+                        crate::infra::metrics::record_result_delivery("retry", "ok");
                         if let Err(e) = state
                             .storage
                             .delete_pending_result(&entry.orchestrator_pubkey, &entry.sub_task_id)
@@ -124,6 +127,7 @@ pub fn spawn_retry_loop(state: Arc<AppState>) {
                         }
                     }
                     Err(e) => {
+                        crate::infra::metrics::record_result_delivery("retry", "error");
                         if let Err(inc_err) =
                             state.storage.increment_pending_result_attempts(entry.id)
                         {

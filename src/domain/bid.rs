@@ -39,6 +39,9 @@ pub struct Bid {
         serialize_with = "serialize_optional_bytes_as_base64"
     )]
     pub operator_sig: Option<Vec<u8>>,
+    /// Unsigned health snapshot for orchestrator Prometheus aggregation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metrics_summary: Option<crate::infra::metrics::MetricsSummary>,
 }
 
 /// Returns true when this node should participate in the bidding round.
@@ -67,6 +70,7 @@ pub fn build_signed_bid(
     current_load: u32,
     supported_features: u32,
     location: Option<GeoInfo>,
+    metrics_summary: Option<crate::infra::metrics::MetricsSummary>,
 ) -> Option<Bid> {
     let operator_id = config.operator_id.clone()?;
     let operator_signing_key = config.operator_signing_key.as_ref()?;
@@ -91,6 +95,7 @@ pub fn build_signed_bid(
         location,
         operator_id: Some(operator_id.clone()),
         operator_sig: None,
+        metrics_summary,
     };
 
     let payload = serialize_bid_payload(&bid);
@@ -295,6 +300,7 @@ mod tests {
             location: None,
             operator_id: None,
             operator_sig: None,
+            metrics_summary: None,
         };
 
         let payload = serialize_bid_payload(&bid);

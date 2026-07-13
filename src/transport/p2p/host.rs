@@ -377,9 +377,11 @@ fn handle_swarm_event(
             ..
         } => {
             tracing::info!("[P2P] Connected to peer {}", peer_id);
+            crate::infra::metrics::set_connected_peers(swarm.connected_peers().count());
             if peer_id == orchestrator_peer_id {
                 *redial_attempt = 0;
                 *redial_sleep = None;
+                crate::infra::metrics::set_orchestrator_connected(true);
                 ensure_orchestrator_gossip_subscription(
                     swarm,
                     topic,
@@ -390,8 +392,11 @@ fn handle_swarm_event(
         }
         SwarmEvent::ConnectionClosed { peer_id, .. } => {
             tracing::info!("[P2P] Disconnected from peer {}", peer_id);
+            crate::infra::metrics::set_connected_peers(swarm.connected_peers().count());
             if peer_id == orchestrator_peer_id {
-                if !swarm.is_connected(&orchestrator_peer_id) {
+                let still_connected = swarm.is_connected(&orchestrator_peer_id);
+                crate::infra::metrics::set_orchestrator_connected(still_connected);
+                if !still_connected {
                     unsubscribe_orchestrator_announcements(swarm, topic);
                 }
                 schedule_bootstrap_redial(*redial_attempt, redial_sleep);
