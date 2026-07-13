@@ -85,6 +85,8 @@ pub struct PublicInputs {
     pub node_id: String,
     pub slice_id: String,
     pub output_result_hash: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub measurement_spec_hash: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
