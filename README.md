@@ -2,6 +2,7 @@
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Status: Alpha](https://img.shields.io/badge/Status-Alpha-yellow.svg)]()
+[![CI](https://github.com/world-qc/wqc-node/actions/workflows/ci.yml/badge.svg)](https://github.com/world-qc/wqc-node/actions/workflows/ci.yml)
 
 **Become the Computer.** `wqc-node` connects your local `wqc-core` engine to the World Quantum Computer (WQC) swarm over **libp2p**. It participates in the permissionless bid lottery, executes slice sub-tasks, and returns zk-STARK proofs via P2P streams.
 
@@ -52,7 +53,7 @@ Wire formats match the [orchestrator README](../wqc-orchestrator/README.md#p2p-p
 
 ### Phase A: `sample_counts` (§3.4)
 
-Signed `SubTask` may include `output_mode`, `shots`, `classical_bit_count`, and orchestrator-generated `sample_seed`. The node forwards these to `wqc-core` unchanged and returns `result_type` + `sample_result` on `/wqc/tensor-result/1.0.0`.  
+Signed `SubTask` may include `output_mode`, `shots`, `classical_bit_count`, and orchestrator-generated `sample_seed`. The node forwards these to `wqc-core` unchanged and returns `result_type` + `sample_result` on `/wqc/tensor-result/1.0.0`.
 `counts` bitstrings follow **Qiskit order** (rightmost = `cbit 0`). Scalar-only tasks are unchanged.
 
 ## Quick Start
