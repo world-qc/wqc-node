@@ -328,6 +328,7 @@ mod tests {
                 circuit: vec![],
                 required_votes: Some(2),
                 mps_max_bond_dim: None,
+                mps_site_order: None,
                 output_mode: String::new(),
                 classical_bit_count: None,
                 shots: None,

@@ -43,6 +43,8 @@ pub struct SubTask {
     #[serde(default)]
     pub mps_max_bond_dim: u32,
     #[serde(default)]
+    pub mps_site_order: Vec<u32>,
+    #[serde(default)]
     pub output_mode: String,
     #[serde(default)]
     pub classical_bit_count: u32,
@@ -131,6 +133,12 @@ pub fn serialize_dispatch_payload(sub_task: &SubTask) -> Result<Vec<u8>, String>
     let observables_json = format_observables_wire_json(&sub_task.observables);
     payload.extend_from_slice(&(observables_json.len() as u32).to_be_bytes());
     payload.extend_from_slice(observables_json.as_bytes());
+
+    let site_order = &sub_task.mps_site_order;
+    payload.extend_from_slice(&(site_order.len() as u32).to_be_bytes());
+    for q in site_order {
+        payload.extend_from_slice(&q.to_be_bytes());
+    }
 
     Ok(payload)
 }
@@ -252,6 +260,11 @@ impl SubTask {
             } else {
                 None
             },
+            mps_site_order: if self.mps_site_order.is_empty() {
+                None
+            } else {
+                Some(self.mps_site_order.iter().map(|&q| q as usize).collect())
+            },
             output_mode: self.output_mode.clone(),
             classical_bit_count: if self.classical_bit_count > 0 {
                 Some(self.classical_bit_count)
@@ -345,6 +358,7 @@ mod tests {
         expected.extend_from_slice(&0u64.to_be_bytes()); // sample_seed
         expected.extend_from_slice(&2u32.to_be_bytes()); // observables_json_len
         expected.extend_from_slice(b"[]"); // observables_json
+        expected.extend_from_slice(&0u32.to_be_bytes()); // mps_site_order_len
         assert_eq!(payload, expected);
     }
 
@@ -382,6 +396,29 @@ mod tests {
         let mut tail = Vec::new();
         tail.extend_from_slice(&(obs_json.len() as u32).to_be_bytes());
         tail.extend_from_slice(obs_json);
+        tail.extend_from_slice(&0u32.to_be_bytes()); // mps_site_order_len
         assert!(payload.ends_with(&tail));
+    }
+
+    #[test]
+    fn serialize_dispatch_payload_includes_site_order() {
+        let sub_task = SubTask {
+            task_id: "s".to_string(),
+            parent_task_id: "p".to_string(),
+            circuit_id: "c".to_string(),
+            qubit_count: 2,
+            original_qubit_count: 2,
+            slice_id: "0".to_string(),
+            mps_site_order: vec![1, 0],
+            ..Default::default()
+        };
+        let payload = serialize_dispatch_payload(&sub_task).expect("serialize");
+        let mut want_suffix = Vec::new();
+        want_suffix.extend_from_slice(&2u32.to_be_bytes());
+        want_suffix.extend_from_slice(b"[]");
+        want_suffix.extend_from_slice(&2u32.to_be_bytes());
+        want_suffix.extend_from_slice(&1u32.to_be_bytes());
+        want_suffix.extend_from_slice(&0u32.to_be_bytes());
+        assert!(payload.ends_with(&want_suffix));
     }
 }

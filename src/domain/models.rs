@@ -35,6 +35,9 @@ pub struct ComputeRequest {
     pub required_votes: Option<u32>,
     #[serde(default)]
     pub mps_max_bond_dim: Option<usize>,
+    /// Optional MPS path: `site_order[site] = logical` compact qubit (identity if absent).
+    #[serde(default)]
+    pub mps_site_order: Option<Vec<usize>>,
     #[serde(default)]
     pub output_mode: String,
     #[serde(default)]
