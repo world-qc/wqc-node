@@ -8,8 +8,8 @@ use axum::extract::State;
 use axum::http::{header, StatusCode};
 use axum::response::IntoResponse;
 use prometheus::{
-    Encoder, Histogram, HistogramOpts, IntCounter, IntCounterVec, IntGauge, Opts, Registry,
-    TextEncoder,
+    Encoder, Histogram, HistogramOpts, IntCounter, IntCounterVec, IntGauge, IntGaugeVec, Opts,
+    Registry, TextEncoder,
 };
 use serde::Serialize;
 
@@ -49,6 +49,8 @@ struct NodeMetrics {
     core_timeouts_total: IntCounter,
     tasks_total: IntCounterVec,
     result_deliveries_total: IntCounterVec,
+    tasks_pruned_total: IntCounter,
+    tasks_rows: IntGaugeVec,
 }
 
 fn wall_ms_buckets() -> Vec<f64> {
@@ -133,6 +135,17 @@ impl NodeMetrics {
             ),
             &["attempt", "result"],
         )?;
+        let tasks_pruned_total = IntCounter::with_opts(Opts::new(
+            "wqc_node_tasks_pruned_total",
+            "Terminal SQLite task rows deleted by the background prune loop",
+        ))?;
+        let tasks_rows = IntGaugeVec::new(
+            Opts::new(
+                "wqc_node_tasks_rows",
+                "SQLite tasks table row counts by status",
+            ),
+            &["status"],
+        )?;
 
         registry.register(Box::new(info))?;
         registry.register(Box::new(uptime_seconds.clone()))?;
@@ -147,6 +160,8 @@ impl NodeMetrics {
         registry.register(Box::new(core_timeouts_total.clone()))?;
         registry.register(Box::new(tasks_total.clone()))?;
         registry.register(Box::new(result_deliveries_total.clone()))?;
+        registry.register(Box::new(tasks_pruned_total.clone()))?;
+        registry.register(Box::new(tasks_rows.clone()))?;
 
         Ok(Self {
             registry,
@@ -162,6 +177,8 @@ impl NodeMetrics {
             core_timeouts_total,
             tasks_total,
             result_deliveries_total,
+            tasks_pruned_total,
+            tasks_rows,
         })
     }
 }
@@ -251,6 +268,13 @@ pub fn record_result_delivery(attempt: &str, result: &str) {
         .inc();
 }
 
+pub fn record_tasks_pruned(count: u64) {
+    if count == 0 {
+        return;
+    }
+    metrics().tasks_pruned_total.inc_by(count);
+}
+
 fn refresh_gauges(state: &AppState) {
     let m = metrics();
     m.uptime_seconds.set(
@@ -269,6 +293,17 @@ fn refresh_gauges(state: &AppState) {
         } else {
             0
         });
+    if let Ok((pending, completed, failed)) = state.storage.count_tasks_by_status() {
+        m.tasks_rows
+            .with_label_values(&["pending"])
+            .set(pending as i64);
+        m.tasks_rows
+            .with_label_values(&["completed"])
+            .set(completed as i64);
+        m.tasks_rows
+            .with_label_values(&["failed"])
+            .set(failed as i64);
+    }
 }
 
 /// Periodically refreshes gauges that mirror SQLite / in-memory queue depth.

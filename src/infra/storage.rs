@@ -59,6 +59,12 @@ impl Storage {
             [],
         )?;
 
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tasks_status_created
+             ON tasks(status, created_at)",
+            [],
+        )?;
+
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
         })
@@ -125,6 +131,50 @@ impl Storage {
             out.push(serde_json::from_str(&p)?);
         }
         Ok(out)
+    }
+
+    /// Deletes terminal (`completed` / `failed`) tasks older than `older_than_unix`.
+    /// Skips rows that still have a matching `pending_results` outbox entry.
+    /// Returns the number of deleted rows.
+    pub fn prune_terminal_tasks(&self, older_than_unix: i64) -> anyhow::Result<u64> {
+        let conn = self.conn.lock().unwrap();
+        let deleted = conn.execute(
+            "DELETE FROM tasks
+             WHERE status IN ('completed', 'failed')
+               AND created_at < ?1
+               AND NOT EXISTS (
+                 SELECT 1 FROM pending_results pr
+                 WHERE pr.orchestrator_pubkey = tasks.orchestrator_pubkey
+                   AND pr.sub_task_id = tasks.task_id
+               )",
+            params![older_than_unix],
+        )?;
+        Ok(deleted as u64)
+    }
+
+    /// Counts rows in `tasks` by status bucket: (pending, completed, failed).
+    pub fn count_tasks_by_status(&self) -> anyhow::Result<(u64, u64, u64)> {
+        let conn = self.conn.lock().unwrap();
+        let mut pending = 0u64;
+        let mut completed = 0u64;
+        let mut failed = 0u64;
+        let mut stmt =
+            conn.prepare("SELECT status, COUNT(*) FROM tasks GROUP BY status")?;
+        let rows = stmt.query_map([], |row| {
+            let status: String = row.get(0)?;
+            let count: i64 = row.get(1)?;
+            Ok((status, count as u64))
+        })?;
+        for row in rows {
+            let (status, count) = row?;
+            match status.as_str() {
+                "pending" => pending = count,
+                "completed" => completed = count,
+                "failed" => failed = count,
+                _ => {}
+            }
+        }
+        Ok((pending, completed, failed))
     }
 
     pub fn upsert_pending_result(
@@ -232,6 +282,21 @@ impl Storage {
                city = excluded.city,
                updated_at = excluded.updated_at",
             params![geo.latitude, geo.longitude, geo.country, geo.city, now],
+        )?;
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn set_task_created_at(
+        &self,
+        orchestrator_pubkey: &str,
+        task_id: &str,
+        created_at: i64,
+    ) -> anyhow::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE tasks SET created_at = ?1 WHERE orchestrator_pubkey = ?2 AND task_id = ?3",
+            params![created_at, orchestrator_pubkey, task_id],
         )?;
         Ok(())
     }
@@ -365,5 +430,93 @@ mod tests {
         assert_eq!(storage.count_pending_results().unwrap(), 1);
         let pending_tasks = storage.get_pending_tasks().unwrap();
         assert!(pending_tasks.is_empty());
+    }
+
+    #[test]
+    fn prune_terminal_tasks_deletes_old_completed_keeps_pending() {
+        let storage = Storage::new(":memory:").unwrap();
+        let done = sample_task("done-1");
+        let pending = sample_task("pending-1");
+        storage.save_task(&done).unwrap();
+        storage.save_task(&pending).unwrap();
+        storage
+            .update_status("orch-pubkey", "done-1", "completed")
+            .unwrap();
+        storage
+            .set_task_created_at("orch-pubkey", "done-1", 1_000)
+            .unwrap();
+        storage
+            .set_task_created_at("orch-pubkey", "pending-1", 1_000)
+            .unwrap();
+
+        let deleted = storage.prune_terminal_tasks(2_000).unwrap();
+        assert_eq!(deleted, 1);
+        assert!(storage
+            .load_task("orch-pubkey", "done-1")
+            .unwrap()
+            .is_none());
+        assert!(storage
+            .load_task("orch-pubkey", "pending-1")
+            .unwrap()
+            .is_some());
+    }
+
+    #[test]
+    fn prune_terminal_tasks_skips_rows_with_outbox() {
+        let storage = Storage::new(":memory:").unwrap();
+        let task = sample_task("sub-1");
+        storage.save_task(&task).unwrap();
+        storage
+            .update_status("orch-pubkey", "sub-1", "completed")
+            .unwrap();
+        storage
+            .set_task_created_at("orch-pubkey", "sub-1", 1_000)
+            .unwrap();
+        storage
+            .upsert_pending_result("orch-pubkey", "sub-1", b"body")
+            .unwrap();
+
+        let deleted = storage.prune_terminal_tasks(2_000).unwrap();
+        assert_eq!(deleted, 0);
+        assert!(storage
+            .load_task("orch-pubkey", "sub-1")
+            .unwrap()
+            .is_some());
+    }
+
+    #[test]
+    fn prune_terminal_tasks_keeps_recent_completed() {
+        let storage = Storage::new(":memory:").unwrap();
+        let task = sample_task("sub-1");
+        storage.save_task(&task).unwrap();
+        storage
+            .update_status("orch-pubkey", "sub-1", "completed")
+            .unwrap();
+        storage
+            .set_task_created_at("orch-pubkey", "sub-1", 5_000)
+            .unwrap();
+
+        let deleted = storage.prune_terminal_tasks(2_000).unwrap();
+        assert_eq!(deleted, 0);
+        assert!(storage
+            .load_task("orch-pubkey", "sub-1")
+            .unwrap()
+            .is_some());
+    }
+
+    #[test]
+    fn count_tasks_by_status_buckets() {
+        let storage = Storage::new(":memory:").unwrap();
+        storage.save_task(&sample_task("p1")).unwrap();
+        storage.save_task(&sample_task("c1")).unwrap();
+        storage.save_task(&sample_task("f1")).unwrap();
+        storage
+            .update_status("orch-pubkey", "c1", "completed")
+            .unwrap();
+        storage
+            .update_status("orch-pubkey", "f1", "failed")
+            .unwrap();
+
+        assert_eq!(storage.count_tasks_by_status().unwrap(), (1, 1, 1));
     }
 }

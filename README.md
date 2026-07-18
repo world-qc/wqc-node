@@ -121,6 +121,8 @@ docker compose -f world-qc-docker/devnet/compose.yml up wqc-node-01
 | `WQC_HTTP_PORT` | no | `8080` | Admin API bind port. |
 | `WQC_DATABASE_URL` | no | `sqlite:wqc-node.db` | SQLite path (`sqlite:` prefix optional). |
 | `WQC_RESULT_RETRY_INTERVAL_SECS` | no | `5` | Background interval for retrying undelivered P2P results. |
+| `WQC_TASK_RETENTION_SECS` | no | `86400` | Delete `completed`/`failed` SQLite `tasks` older than this many seconds. `0` disables. |
+| `WQC_TASK_PRUNE_INTERVAL_SECS` | no | `3600` | Background interval for terminal-task prune. |
 
 ## Admin HTTP API
 

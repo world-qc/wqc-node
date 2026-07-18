@@ -89,6 +89,8 @@ cargo run --release
 | `WQC_P2P_LISTEN_PORT` | `4002` | Bind `0.0.0.0` on TCP and QUIC. |
 | `WQC_HTTP_PORT` | `8080` | Admin API only. |
 | `WQC_RESULT_RETRY_INTERVAL_SECS` | `5` | Interval for background P2P result outbox retries. |
+| `WQC_TASK_RETENTION_SECS` | `86400` | Age after which `completed`/`failed` `tasks` rows are deleted. `0` disables prune. |
+| `WQC_TASK_PRUNE_INTERVAL_SECS` | `3600` | Background interval for terminal-task prune. |
 | `RUST_LOG` | — | e.g. `info` or `wqc_node=debug` |
 
 ### Memory budget notes
@@ -118,7 +120,8 @@ Signoff drill (devnet multi-node scrape): `wqc-docs/examples/e2e/signoff/06_memo
 4. Sync supported gates from `wqc-core` `GET /gates`.
 5. Start libp2p host: dial bootstrap, subscribe to gossip, accept stream protocols.
 6. Start result outbox retry loop (`WQC_RESULT_RETRY_INTERVAL_SECS`, default 5s).
-7. Start single worker loop and admin HTTP server.
+7. Start terminal-task prune loop (`WQC_TASK_RETENTION_SECS` / `WQC_TASK_PRUNE_INTERVAL_SECS`).
+8. Start single worker loop and admin HTTP server.
 
 ### Healthy startup signals
 
@@ -147,7 +150,7 @@ If those appear, the node is usually ready to receive announcements and submit b
 | `tasks.status = pending` | Re-enqueued for compute |
 | `pending_results` row present | Retry loop delivers when P2P is ready (no re-compute) |
 
-Completed/failed `tasks` rows are not pruned automatically.
+`completed` / `failed` `tasks` rows older than `WQC_TASK_RETENTION_SECS` (default 24h) are deleted by a background prune loop, unless a matching `pending_results` outbox row still exists. After prune, a re-dispatched `task_id` is treated as new (idempotency window = retention). Set `WQC_TASK_RETENTION_SECS=0` to disable.
 
 Devnet signoff drill: `wqc-docs/examples/e2e/signoff/03_node_restart.sh` (records `/status` `pending_tasks` / `outbox_pending` around `docker restart`).
 
