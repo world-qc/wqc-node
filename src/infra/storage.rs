@@ -158,8 +158,7 @@ impl Storage {
         let mut pending = 0u64;
         let mut completed = 0u64;
         let mut failed = 0u64;
-        let mut stmt =
-            conn.prepare("SELECT status, COUNT(*) FROM tasks GROUP BY status")?;
+        let mut stmt = conn.prepare("SELECT status, COUNT(*) FROM tasks GROUP BY status")?;
         let rows = stmt.query_map([], |row| {
             let status: String = row.get(0)?;
             let count: i64 = row.get(1)?;
@@ -479,10 +478,7 @@ mod tests {
 
         let deleted = storage.prune_terminal_tasks(2_000).unwrap();
         assert_eq!(deleted, 0);
-        assert!(storage
-            .load_task("orch-pubkey", "sub-1")
-            .unwrap()
-            .is_some());
+        assert!(storage.load_task("orch-pubkey", "sub-1").unwrap().is_some());
     }
 
     #[test]
@@ -499,10 +495,7 @@ mod tests {
 
         let deleted = storage.prune_terminal_tasks(2_000).unwrap();
         assert_eq!(deleted, 0);
-        assert!(storage
-            .load_task("orch-pubkey", "sub-1")
-            .unwrap()
-            .is_some());
+        assert!(storage.load_task("orch-pubkey", "sub-1").unwrap().is_some());
     }
 
     #[test]

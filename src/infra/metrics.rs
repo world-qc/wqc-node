@@ -64,13 +64,18 @@ impl NodeMetrics {
         let registry = Registry::new();
 
         let info = IntGauge::with_opts(
-            Opts::new("wqc_node_info", "Constant 1 labeled with node build metadata")
-                .const_label("version", env!("CARGO_PKG_VERSION")),
+            Opts::new(
+                "wqc_node_info",
+                "Constant 1 labeled with node build metadata",
+            )
+            .const_label("version", env!("CARGO_PKG_VERSION")),
         )?;
         info.set(1);
 
-        let uptime_seconds =
-            IntGauge::with_opts(Opts::new("wqc_node_uptime_seconds", "Process uptime in seconds"))?;
+        let uptime_seconds = IntGauge::with_opts(Opts::new(
+            "wqc_node_uptime_seconds",
+            "Process uptime in seconds",
+        ))?;
         let pending_tasks = IntGauge::with_opts(Opts::new(
             "wqc_node_pending_tasks",
             "Sub-tasks queued or in-flight on this node",
@@ -222,10 +227,7 @@ pub fn snapshot_for_bid(state: &AppState) -> MetricsSummary {
             0
         },
         core_timeouts_total: CORE_TIMEOUTS.load(Ordering::Relaxed),
-        uptime_seconds: STARTED_AT
-            .get()
-            .map(|t| t.elapsed().as_secs())
-            .unwrap_or(0),
+        uptime_seconds: STARTED_AT.get().map(|t| t.elapsed().as_secs()).unwrap_or(0),
     }
 }
 
