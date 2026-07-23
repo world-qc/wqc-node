@@ -1,16 +1,29 @@
-use crate::domain::models::{ComputeRequest, ComputeResponse, CoreSystemInfo};
+use crate::domain::models::{ComputeRequest, ComputeResponse, CoreSystemInfo, Proof};
 use anyhow::{Context, Result};
 use reqwest::{Client, StatusCode};
+use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 pub struct WqcCoreClient {
     client: Client,
     base_url: String,
     compute_timeout: Duration,
+    pcs_timeout: Duration,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LeafPcsResponse {
+    pub leaf_pcs_b64: String,
+    pub bytes: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct LeafPcsRequest {
+    proof: Proof,
 }
 
 impl WqcCoreClient {
-    pub fn new(core_url: &str, compute_timeout: Duration) -> Self {
+    pub fn new(core_url: &str, compute_timeout: Duration, pcs_timeout: Duration) -> Self {
         if core_url.starts_with("unix:") {
             let socket_path = core_url.trim_start_matches("unix:");
 
@@ -31,6 +44,7 @@ impl WqcCoreClient {
                 client,
                 base_url: "http://localhost".to_string(),
                 compute_timeout,
+                pcs_timeout,
             }
         } else {
             Self {
@@ -40,6 +54,7 @@ impl WqcCoreClient {
                     .expect("Failed to build HTTP client"),
                 base_url: core_url.trim_end_matches('/').to_string(),
                 compute_timeout,
+                pcs_timeout,
             }
         }
     }
@@ -81,6 +96,34 @@ impl WqcCoreClient {
                 let error_text = response.text().await.unwrap_or_default();
                 anyhow::bail!(
                     "wqc-core returned error status: {} - {}",
+                    status,
+                    error_text
+                )
+            }
+        }
+    }
+
+    /// Deferred leaf PCS construction (after result delivery).
+    pub async fn build_leaf_pcs(&self, proof: Proof) -> Result<LeafPcsResponse> {
+        let url = format!("{}/leaf_pcs", self.base_url);
+        let response = self
+            .client
+            .post(&url)
+            .timeout(self.pcs_timeout)
+            .json(&LeafPcsRequest { proof })
+            .send()
+            .await
+            .context("Failed to send leaf_pcs request to wqc-core")?;
+
+        match response.status() {
+            StatusCode::OK => response
+                .json::<LeafPcsResponse>()
+                .await
+                .context("Failed to parse leaf_pcs response"),
+            status => {
+                let error_text = response.text().await.unwrap_or_default();
+                anyhow::bail!(
+                    "wqc-core leaf_pcs error status: {} - {}",
                     status,
                     error_text
                 )

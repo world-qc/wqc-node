@@ -39,7 +39,15 @@ pub async fn deliver_result(
         );
     }
 
-    try_deliver_pending(state, &orchestrator_pubkey, &sub_task_id, &wire_body).await
+    try_deliver_pending(
+        state,
+        &orchestrator_pubkey,
+        &sub_task_id,
+        &wire_body,
+        payload,
+        task,
+    )
+    .await
 }
 
 async fn try_deliver_pending(
@@ -47,6 +55,8 @@ async fn try_deliver_pending(
     orchestrator_pubkey: &str,
     sub_task_id: &str,
     wire_body: &[u8],
+    payload: &TaskResultPayload,
+    task: &ComputeTask,
 ) -> anyhow::Result<()> {
     match send_result_wire(state.clone(), wire_body).await {
         Ok(()) => {
@@ -58,6 +68,15 @@ async fn try_deliver_pending(
                 "[Result Outbox] Delivered sub_task_id={} to orchestrator",
                 sub_task_id
             );
+            if payload.status == "success" {
+                if let Some(proof) = payload.proof.as_ref() {
+                    crate::application::pcs_outbox::enqueue_after_result(
+                        state.clone(),
+                        task,
+                        proof,
+                    );
+                }
+            }
             Ok(())
         }
         Err(e) => {
@@ -125,6 +144,22 @@ pub fn spawn_retry_loop(state: Arc<AppState>) {
                                 entry.attempts
                             );
                         }
+                        // PCS enqueue on retry path: decode proof from wire if possible is heavy;
+                        // worker already stored the task — load proof from task storage when present.
+                        if let Ok(Some(task)) = state
+                            .storage
+                            .load_task(&entry.orchestrator_pubkey, &entry.sub_task_id)
+                        {
+                            if let Ok(Some(proof)) =
+                                extract_proof_from_result_wire(&entry.wire_body)
+                            {
+                                crate::application::pcs_outbox::enqueue_after_result(
+                                    state.clone(),
+                                    &task,
+                                    &proof,
+                                );
+                            }
+                        }
                     }
                     Err(e) => {
                         crate::infra::metrics::record_result_delivery("retry", "error");
@@ -147,4 +182,18 @@ pub fn spawn_retry_loop(state: Arc<AppState>) {
             }
         }
     });
+}
+
+fn extract_proof_from_result_wire(
+    wire_body: &[u8],
+) -> anyhow::Result<Option<crate::domain::models::Proof>> {
+    let value: serde_json::Value = serde_json::from_slice(wire_body)?;
+    if value.get("error").and_then(|e| e.as_str()).is_some() {
+        return Ok(None);
+    }
+    let proof = value.get("proof").cloned();
+    match proof {
+        Some(p) if !p.is_null() => Ok(Some(serde_json::from_value(p)?)),
+        _ => Ok(None),
+    }
 }

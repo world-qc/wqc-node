@@ -12,6 +12,15 @@ pub struct PendingResult {
     pub attempts: u32,
 }
 
+#[derive(Debug, Clone)]
+pub struct PendingPcs {
+    pub id: i64,
+    pub orchestrator_pubkey: String,
+    pub sub_task_id: String,
+    pub job_json: Vec<u8>,
+    pub attempts: u32,
+}
+
 pub struct Storage {
     conn: Arc<Mutex<Connection>>,
 }
@@ -40,6 +49,19 @@ impl Storage {
                 orchestrator_pubkey TEXT NOT NULL,
                 sub_task_id TEXT NOT NULL,
                 wire_body BLOB NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                created_at INTEGER NOT NULL,
+                UNIQUE(orchestrator_pubkey, sub_task_id)
+            )",
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS pending_pcs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                orchestrator_pubkey TEXT NOT NULL,
+                sub_task_id TEXT NOT NULL,
+                job_json BLOB NOT NULL,
                 attempts INTEGER NOT NULL DEFAULT 0,
                 created_at INTEGER NOT NULL,
                 UNIQUE(orchestrator_pubkey, sub_task_id)
@@ -243,6 +265,72 @@ impl Storage {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "UPDATE pending_results SET attempts = attempts + 1 WHERE id = ?1",
+            params![id],
+        )?;
+        Ok(())
+    }
+
+    pub fn upsert_pending_pcs(
+        &self,
+        orchestrator_pubkey: &str,
+        sub_task_id: &str,
+        job: &crate::domain::pcs::PendingPcsJob,
+    ) -> anyhow::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let now = unix_now();
+        let job_json = serde_json::to_vec(job)?;
+        conn.execute(
+            "INSERT INTO pending_pcs (orchestrator_pubkey, sub_task_id, job_json, attempts, created_at)
+             VALUES (?1, ?2, ?3, 0, ?4)
+             ON CONFLICT(orchestrator_pubkey, sub_task_id) DO UPDATE SET
+               job_json = excluded.job_json,
+               attempts = 0,
+               created_at = excluded.created_at",
+            params![orchestrator_pubkey, sub_task_id, job_json, now],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_pending_pcs(
+        &self,
+        orchestrator_pubkey: &str,
+        sub_task_id: &str,
+    ) -> anyhow::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM pending_pcs WHERE orchestrator_pubkey = ?1 AND sub_task_id = ?2",
+            params![orchestrator_pubkey, sub_task_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_pending_pcs(&self) -> anyhow::Result<Vec<PendingPcs>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, orchestrator_pubkey, sub_task_id, job_json, attempts
+             FROM pending_pcs
+             ORDER BY created_at ASC",
+        )?;
+
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(PendingPcs {
+                    id: row.get(0)?,
+                    orchestrator_pubkey: row.get(1)?,
+                    sub_task_id: row.get(2)?,
+                    job_json: row.get(3)?,
+                    attempts: row.get::<_, i64>(4)? as u32,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(rows)
+    }
+
+    pub fn increment_pending_pcs_attempts(&self, id: i64) -> anyhow::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE pending_pcs SET attempts = attempts + 1 WHERE id = ?1",
             params![id],
         )?;
         Ok(())

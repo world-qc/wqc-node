@@ -221,6 +221,7 @@ mod tests {
             max_qubits,
             max_memory_gib: 0.0,
             compute_timeout_secs: 300,
+            pcs_timeout_secs: 7200,
             signing_key: SigningKey::from_bytes(&[0u8; 32]),
             bootstrap_urls: vec![],
             bootstrap_source_url: None,

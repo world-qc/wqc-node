@@ -4,6 +4,7 @@ pub mod geo;
 pub mod models;
 pub mod operator;
 pub mod p2p;
+pub mod pcs;
 pub mod result;
 pub mod token;
 pub mod validation;

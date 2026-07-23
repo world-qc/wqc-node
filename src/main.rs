@@ -40,6 +40,7 @@ async fn main() -> anyhow::Result<()> {
     let core_client = Arc::new(WqcCoreClient::new(
         &config.core_url,
         Duration::from_secs(config.compute_timeout_secs),
+        Duration::from_secs(config.pcs_timeout_secs),
     ));
     let supported_gates = handlers::sync_core_capabilities(core_client.clone()).await;
     let core_sysinfo = core_client.get_system_info().await.ok();
@@ -92,6 +93,7 @@ async fn main() -> anyhow::Result<()> {
     p2p::host::spawn(config.clone(), shared_state.clone());
 
     application::result_outbox::spawn_retry_loop(shared_state.clone());
+    application::pcs_outbox::spawn_retry_loop(shared_state.clone());
     application::task_prune::spawn_prune_loop(shared_state.clone());
     infra::metrics::spawn_collector(shared_state.clone());
 

@@ -19,6 +19,7 @@ Operational details (env vars, Docker, troubleshooting) live in [`docs/OPERATION
 - **Swarm participation**: Subscribe to task announcements, submit signed bids, receive dispatches.
 - **Slice execution**: Forward pruned circuits to `wqc-core`, collect `complex_result` or `sample_result` + STARK `proof`.
 - **Result delivery**: Stream results back to the orchestrator on `/wqc/tensor-result/1.0.0`.
+- **Leaf PCS follow-up**: After result ACK, call core `POST /leaf_pcs` and stream `/wqc/tensor-pcs/1.0.0` (failures never roll back the result).
 - **Crash recovery**: Persist pending tasks in SQLite and resume after restart.
 - **Admin surface**: Expose `GET /status` and `GET /health` for local monitoring.
 
@@ -30,6 +31,7 @@ Orchestrator (libp2p :4001)
     │  Stream: /wqc/tensor-net/1.0.0      ← signed Bid
     │  Stream: /wqc/tensor-dispatch/1.0.0 → SubTask
     │  Stream: /wqc/tensor-result/1.0.0   ← Result + Proof
+    │  Stream: /wqc/tensor-pcs/1.0.0      ← Deferred LeafPcsBundle (optional)
     ▼
 wqc-node (libp2p :4002, HTTP admin :8080)
     │  POST /compute
@@ -48,6 +50,7 @@ The node runs **one sub-task at a time** per process. The orchestrator tracks in
 | `/wqc/tensor-net/1.0.0` | Node → Orchestrator | Signed lottery `Bid` |
 | `/wqc/tensor-dispatch/1.0.0` | Orchestrator → Node | `SubTask` for execution |
 | `/wqc/tensor-result/1.0.0` | Node → Orchestrator | `result_type` + `complex_result` + optional `sample_result` + `proof` + `work_report` |
+| `/wqc/tensor-pcs/1.0.0` | Node → Orchestrator | `sub_task_id` + `leaf_pcs_b64` (deferred PCS after result) |
 
 Wire formats match the [orchestrator README](../wqc-orchestrator/README.md#p2p-protocols-node-facing).
 
