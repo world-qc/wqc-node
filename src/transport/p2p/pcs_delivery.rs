@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::application::state::AppState;
 use crate::domain::pcs::{PcsMessage, PROTOCOL_PCS};
-use crate::transport::p2p::stream_io::write_outbound_stream;
+use crate::transport::p2p::stream_io::write_outbound_stream_expect_ack;
 
 pub async fn send_pcs_wire(state: Arc<AppState>, wire_body: &[u8]) -> anyhow::Result<()> {
     let orchestrator_peer_id = state
@@ -17,10 +17,11 @@ pub async fn send_pcs_wire(state: Arc<AppState>, wire_body: &[u8]) -> anyhow::Re
         .clone()
         .ok_or_else(|| anyhow::anyhow!("P2P stream control is not ready yet"))?;
 
-    write_outbound_stream(&control, orchestrator_peer_id, PROTOCOL_PCS, wire_body).await?;
+    write_outbound_stream_expect_ack(&control, orchestrator_peer_id, PROTOCOL_PCS, wire_body)
+        .await?;
 
     tracing::info!(
-        "[P2P PCS] Delivered {} bytes to orchestrator {}",
+        "[P2P PCS] Delivered {} bytes to orchestrator {} (acked)",
         wire_body.len(),
         orchestrator_peer_id
     );

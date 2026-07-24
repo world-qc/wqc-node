@@ -217,8 +217,8 @@ pub fn spawn_retry_loop(state: Arc<AppState>) {
                                 inc_err
                             );
                         }
-                        tracing::debug!(
-                            "[PCS Outbox] Retry failed for sub_task_id={}: {}",
+                        tracing::warn!(
+                            "[PCS Outbox] Retry deliver failed for sub_task_id={}: {}",
                             entry.sub_task_id,
                             e
                         );
