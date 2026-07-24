@@ -22,4 +22,9 @@ impl PcsMessage {
 pub struct PendingPcsJob {
     pub sub_task_id: String,
     pub proof: Proof,
+    /// Cached after a successful `POST /leaf_pcs` so retries only re-send.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leaf_pcs_b64: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leaf_pcs_bytes: Option<u64>,
 }

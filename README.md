@@ -19,7 +19,7 @@ Operational details (env vars, Docker, troubleshooting) live in [`docs/OPERATION
 - **Swarm participation**: Subscribe to task announcements, submit signed bids, receive dispatches.
 - **Slice execution**: Forward pruned circuits to `wqc-core`, collect `complex_result` or `sample_result` + STARK `proof`.
 - **Result delivery**: Stream results back to the orchestrator on `/wqc/tensor-result/1.0.0`.
-- **Leaf PCS follow-up**: After result ACK, call core `POST /leaf_pcs` and stream `/wqc/tensor-pcs/1.0.0` (failures never roll back the result).
+- **Leaf PCS follow-up**: After result ACK, call core `POST /leaf_pcs` and stream `/wqc/tensor-pcs/1.0.0` (failures never roll back the result). An in-flight guard prevents duplicate concurrent proves; a successful build is cached in the PCS outbox so delivery retries only re-send.
 - **Crash recovery**: Persist pending tasks in SQLite and resume after restart.
 - **Admin surface**: Expose `GET /status` and `GET /health` for local monitoring.
 
