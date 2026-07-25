@@ -56,27 +56,25 @@ fn dial_bootstrap_peers(swarm: &mut Swarm<NodeBehaviour>, addrs: &[Multiaddr], l
     }
 }
 
-/// (Re)subscribe to orchestrator announcements.
+/// (Re)subscribe to orchestrator announcements after a full reconnect.
 ///
-/// On the **first** transport to the orchestrator we force unsubscribe→subscribe so a
-/// fresh SUBSCRIBE control frame is sent after a full disconnect (rust-libp2p #1671).
-///
-/// On **additional** transports (TCP + QUIC to the same peer) we must NOT unsubscribe:
-/// gossipsub tracks subscriptions per PeerId, so an UNSUBSCRIBE removes the peer from the
-/// hub's `topic_peers` for all transports until SUBSCRIBE returns — announcements published
-/// in that window are lost.
+/// rust-libp2p #1671: a local subscribe that predates the current connection often
+/// never sends SUBSCRIBE to the new peer. Force unsubscribe→subscribe once per
+/// reconnect cycle (tracked by `orch_gossip_live`), not once per transport —
+/// dual TCP+QUIC must not unsubscribe on the second ConnectionEstablished or the
+/// hub briefly loses the peer from `topic_peers`.
 fn ensure_orchestrator_gossip_subscription(
     swarm: &mut Swarm<NodeBehaviour>,
     topic: &IdentTopic,
     orchestrator_peer_id: PeerId,
-    first_transport: bool,
+    orch_gossip_live: &mut bool,
 ) {
     swarm
         .behaviour_mut()
         .gossipsub
         .add_explicit_peer(&orchestrator_peer_id);
 
-    if !first_transport {
+    if *orch_gossip_live {
         tracing::debug!(
             "[P2P Gossip] Additional orchestrator transport; keeping existing subscription"
         );
@@ -85,10 +83,13 @@ fn ensure_orchestrator_gossip_subscription(
 
     let _ = swarm.behaviour_mut().gossipsub.unsubscribe(topic);
     match swarm.behaviour_mut().gossipsub.subscribe(topic) {
-        Ok(true) => tracing::info!(
-            "[P2P Gossip] Subscribed to {} after connecting to orchestrator",
-            ANNOUNCEMENT_TOPIC
-        ),
+        Ok(true) => {
+            *orch_gossip_live = true;
+            tracing::info!(
+                "[P2P Gossip] Subscribed to {} after connecting to orchestrator",
+                ANNOUNCEMENT_TOPIC
+            );
+        }
         Ok(false) => tracing::warn!(
             "[P2P Gossip] Forced subscribe to {} returned false",
             ANNOUNCEMENT_TOPIC
@@ -249,6 +250,8 @@ async fn run(config: NodeConfig, state: Arc<AppState>) -> anyhow::Result<()> {
 
     let mut redial_attempt: u32 = 0;
     let mut redial_sleep: Option<Pin<Box<Sleep>>> = None;
+    // Cleared on full orchestrator disconnect; set after a successful force-subscribe.
+    let mut orch_gossip_live = false;
     if !swarm
         .connected_peers()
         .any(|peer_id| *peer_id == orchestrator_peer_id)
@@ -276,6 +279,7 @@ async fn run(config: NodeConfig, state: Arc<AppState>) -> anyhow::Result<()> {
                     &state,
                     &mut redial_attempt,
                     &mut redial_sleep,
+                    &mut orch_gossip_live,
                 );
             }
             _ = async {
@@ -309,6 +313,7 @@ fn handle_swarm_event(
     state: &Arc<AppState>,
     redial_attempt: &mut u32,
     redial_sleep: &mut Option<Pin<Box<Sleep>>>,
+    orch_gossip_live: &mut bool,
 ) {
     match event {
         SwarmEvent::Behaviour(NodeBehaviourEvent::Gossipsub(gossipsub::Event::Subscribed {
@@ -372,23 +377,14 @@ fn handle_swarm_event(
                 swarm.local_peer_id()
             );
         }
-        SwarmEvent::ConnectionEstablished {
-            peer_id,
-            num_established,
-            ..
-        } => {
+        SwarmEvent::ConnectionEstablished { peer_id, .. } => {
             tracing::info!("[P2P] Connected to peer {}", peer_id);
             crate::infra::metrics::set_connected_peers(swarm.connected_peers().count());
             if peer_id == orchestrator_peer_id {
                 *redial_attempt = 0;
                 *redial_sleep = None;
                 crate::infra::metrics::set_orchestrator_connected(true);
-                ensure_orchestrator_gossip_subscription(
-                    swarm,
-                    topic,
-                    peer_id,
-                    num_established.get() == 1,
-                );
+                ensure_orchestrator_gossip_subscription(swarm, topic, peer_id, orch_gossip_live);
             }
         }
         SwarmEvent::ConnectionClosed { peer_id, .. } => {
@@ -399,6 +395,7 @@ fn handle_swarm_event(
                 crate::infra::metrics::set_orchestrator_connected(still_connected);
                 if !still_connected {
                     unsubscribe_orchestrator_announcements(swarm, topic);
+                    *orch_gossip_live = false;
                 }
                 schedule_bootstrap_redial(*redial_attempt, redial_sleep);
             }
