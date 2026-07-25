@@ -214,7 +214,7 @@ pub fn verify_dispatch_signature(
     )
 }
 
-fn verify_orchestrator_signature(
+pub(crate) fn verify_orchestrator_signature(
     payload: &[u8],
     signature_b64: &str,
     orchestrator_public_key_b64: &str,

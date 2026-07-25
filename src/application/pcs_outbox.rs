@@ -4,10 +4,23 @@ use std::time::Duration;
 
 use crate::application::state::AppState;
 use crate::domain::models::{ComputeTask, Proof};
-use crate::domain::pcs::PendingPcsJob;
+use crate::domain::pcs::{PcsRequest, PendingPcsJob};
 use crate::transport::p2p::pcs_delivery::{build_pcs_wire_body, send_pcs_wire};
 
 const DEFAULT_RETRY_INTERVAL_SECS: u64 = 30;
+/// Jobs the orchestrator never asked for are dropped after this long: the node
+/// lost the proof-winner draw, so its retained proof is dead weight.
+const DEFAULT_UNREQUESTED_TTL_SECS: i64 = 6 * 3600;
+/// Window for the retained proof to appear when a request beats the result ACK path.
+const RETAINED_PROOF_LOOKUP_ATTEMPTS: u32 = 10;
+const RETAINED_PROOF_LOOKUP_DELAY: Duration = Duration::from_millis(500);
+
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or_default()
+}
 
 fn is_core_down_error(err: &anyhow::Error) -> bool {
     let msg = format!("{err:#}");
@@ -34,62 +47,161 @@ fn release_inflight(sub_task_id: &str) {
     set.remove(sub_task_id);
 }
 
-/// Queues deferred leaf PCS build+delivery after a successful result ACK.
-/// Failures never roll back the already-delivered result.
-pub fn enqueue_after_result(state: Arc<AppState>, task: &ComputeTask, proof: &Proof) {
+/// Retains the proof a leaf PCS would bind to after a successful result ACK.
+///
+/// Proving is deliberately not started here. Only one node per slice — the
+/// proof winner the orchestrator picks at quorum — is asked for a bundle, and
+/// building one is as memory-hungry as the compute itself. The job sits idle
+/// until [`handle_pcs_request`] arrives, or is pruned once it clearly lost.
+pub fn retain_after_result(state: Arc<AppState>, task: &ComputeTask, proof: &Proof) {
     let orchestrator_pubkey = task.orchestrator_pubkey.clone();
     let sub_task_id = task.request.task_id.clone();
     let mut job = PendingPcsJob {
         sub_task_id: sub_task_id.clone(),
         proof: proof.clone(),
+        requested: false,
         leaf_pcs_b64: None,
         leaf_pcs_bytes: None,
     };
-    // Preserve a prior cached build if result ACK path re-enqueues.
-    if let Ok(pending) = state.storage.list_pending_pcs() {
-        if let Some(entry) = pending
-            .iter()
-            .find(|e| e.orchestrator_pubkey == orchestrator_pubkey && e.sub_task_id == sub_task_id)
-        {
-            if let Ok(existing) = serde_json::from_slice::<PendingPcsJob>(&entry.job_json) {
-                if existing.leaf_pcs_b64.is_some() {
-                    job.leaf_pcs_b64 = existing.leaf_pcs_b64;
-                    job.leaf_pcs_bytes = existing.leaf_pcs_bytes;
-                }
+    // The result retry path can re-enter; never drop a won request or cached build.
+    if let Ok(Some(entry)) = state
+        .storage
+        .get_pending_pcs(&orchestrator_pubkey, &sub_task_id)
+    {
+        if let Ok(existing) = serde_json::from_slice::<PendingPcsJob>(&entry.job_json) {
+            job.requested = existing.requested;
+            if existing.leaf_pcs_b64.is_some() {
+                job.leaf_pcs_b64 = existing.leaf_pcs_b64;
+                job.leaf_pcs_bytes = existing.leaf_pcs_bytes;
             }
         }
     }
+    let already_requested = job.requested;
 
     if let Err(e) = state
         .storage
         .upsert_pending_pcs(&orchestrator_pubkey, &sub_task_id, &job)
     {
         tracing::error!(
-            "[PCS Outbox] Failed to enqueue sub_task_id={}: {}",
+            "[PCS Outbox] Failed to retain proof for sub_task_id={}: {}",
             sub_task_id,
             e
         );
         return;
     }
 
+    if !already_requested {
+        tracing::debug!(
+            "[PCS Outbox] Retained proof for sub_task_id={}; awaiting orchestrator PCS request",
+            sub_task_id
+        );
+        return;
+    }
+
+    spawn_build_and_deliver(state, orchestrator_pubkey, sub_task_id, job);
+}
+
+/// Starts the leaf PCS build for a sub-task this node has been named winner of.
+///
+/// The orchestrator resolves quorum while acking our result, so the request can
+/// land a moment before [`retain_after_result`] has persisted the proof. Poll
+/// briefly rather than discarding a request we are about to be able to serve.
+pub fn handle_pcs_request(state: Arc<AppState>, orchestrator_pubkey: &str, request: &PcsRequest) {
+    let orchestrator_pubkey = orchestrator_pubkey.to_string();
+    let sub_task_id = request.sub_task_id.clone();
+
+    tokio::spawn(async move {
+        let mut job = None;
+        for attempt in 0..RETAINED_PROOF_LOOKUP_ATTEMPTS {
+            match state
+                .storage
+                .get_pending_pcs(&orchestrator_pubkey, &sub_task_id)
+            {
+                Ok(Some(entry)) => match serde_json::from_slice::<PendingPcsJob>(&entry.job_json) {
+                    Ok(found) => {
+                        job = Some(found);
+                        break;
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            "[PCS Outbox] Corrupt retained job for sub_task_id={}: {}",
+                            sub_task_id,
+                            e
+                        );
+                        return;
+                    }
+                },
+                Ok(None) => {}
+                Err(e) => {
+                    tracing::error!(
+                        "[PCS Outbox] Failed to load retained proof for sub_task_id={}: {}",
+                        sub_task_id,
+                        e
+                    );
+                    return;
+                }
+            }
+            if attempt + 1 < RETAINED_PROOF_LOOKUP_ATTEMPTS {
+                tokio::time::sleep(RETAINED_PROOF_LOOKUP_DELAY).await;
+            }
+        }
+
+        let Some(mut job) = job else {
+            tracing::warn!(
+                "[PCS Outbox] PCS requested for sub_task_id={} but no proof is retained",
+                sub_task_id
+            );
+            return;
+        };
+
+        if !job.requested {
+            job.requested = true;
+            if let Err(e) =
+                state
+                    .storage
+                    .upsert_pending_pcs(&orchestrator_pubkey, &sub_task_id, &job)
+            {
+                tracing::error!(
+                    "[PCS Outbox] Failed to mark sub_task_id={} as requested: {}",
+                    sub_task_id,
+                    e
+                );
+                return;
+            }
+            tracing::info!(
+                "[PCS Outbox] Named slice proof winner for sub_task_id={}; building leaf PCS",
+                sub_task_id
+            );
+        }
+
+        spawn_build_and_deliver(state, orchestrator_pubkey, sub_task_id, job);
+    });
+}
+
+fn spawn_build_and_deliver(
+    state: Arc<AppState>,
+    orchestrator_pubkey: String,
+    sub_task_id: String,
+    job: PendingPcsJob,
+) {
     tokio::spawn(async move {
         match try_build_and_deliver(state, &orchestrator_pubkey, &sub_task_id, job).await {
             Ok(DeliverOutcome::Delivered) => {}
             Ok(DeliverOutcome::SkippedInFlight) => {
                 tracing::debug!(
-                    "[PCS Outbox] Initial spawn skipped sub_task_id={} (already in flight)",
+                    "[PCS Outbox] Build skipped sub_task_id={} (already in flight)",
                     sub_task_id
                 );
             }
             Ok(DeliverOutcome::SkippedCoreDown) => {
                 tracing::warn!(
-                    "[PCS Outbox] Initial PCS prove deferred for sub_task_id={} (wqc-core unhealthy)",
+                    "[PCS Outbox] PCS prove deferred for sub_task_id={} (wqc-core unhealthy)",
                     sub_task_id
                 );
             }
             Err(e) => {
                 tracing::warn!(
-                    "[PCS Outbox] Initial PCS delivery failed for sub_task_id={} (queued for retry): {}",
+                    "[PCS Outbox] PCS delivery failed for sub_task_id={} (queued for retry): {}",
                     sub_task_id,
                     e
                 );
@@ -174,12 +286,17 @@ pub fn spawn_retry_loop(state: Arc<AppState>) {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(DEFAULT_RETRY_INTERVAL_SECS);
+    let unrequested_ttl_secs = std::env::var("WQC_PCS_UNREQUESTED_TTL_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(DEFAULT_UNREQUESTED_TTL_SECS);
 
     tokio::spawn(async move {
         let interval = Duration::from_secs(interval_secs);
         tracing::info!(
-            "[PCS Outbox] Retry loop started (interval={}s)",
-            interval_secs
+            "[PCS Outbox] Retry loop started (interval={}s, unrequested_ttl={}s)",
+            interval_secs,
+            unrequested_ttl_secs
         );
 
         loop {
@@ -199,6 +316,7 @@ pub fn spawn_retry_loop(state: Arc<AppState>) {
 
             tracing::debug!("[PCS Outbox] Retrying {} pending PCS job(s)", pending.len());
 
+            let now = unix_now();
             for entry in pending {
                 let job: PendingPcsJob = match serde_json::from_slice(&entry.job_json) {
                     Ok(j) => j,
@@ -211,6 +329,24 @@ pub fn spawn_retry_loop(state: Arc<AppState>) {
                         continue;
                     }
                 };
+
+                if !job.requested {
+                    if now - entry.created_at >= unrequested_ttl_secs {
+                        if let Err(e) = state.storage.delete_pending_pcs_by_id(entry.id) {
+                            tracing::error!(
+                                "[PCS Outbox] Failed to prune unrequested sub_task_id={}: {}",
+                                entry.sub_task_id,
+                                e
+                            );
+                        } else {
+                            tracing::info!(
+                                "[PCS Outbox] Pruned unrequested sub_task_id={} (not the slice proof winner)",
+                                entry.sub_task_id
+                            );
+                        }
+                    }
+                    continue;
+                }
 
                 match try_build_and_deliver(
                     state.clone(),

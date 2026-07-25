@@ -3,6 +3,7 @@ pub mod bid_client;
 pub mod dispatch_handler;
 pub mod host;
 pub mod pcs_delivery;
+pub mod pcs_request_handler;
 pub mod result_delivery;
 pub mod result_sink;
 pub mod stream_io;

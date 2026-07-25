@@ -19,6 +19,7 @@ pub struct PendingPcs {
     pub sub_task_id: String,
     pub job_json: Vec<u8>,
     pub attempts: u32,
+    pub created_at: i64,
 }
 
 pub struct Storage {
@@ -280,12 +281,13 @@ impl Storage {
         let now = unix_now();
         let job_json = serde_json::to_vec(job)?;
         conn.execute(
+            // created_at is kept on conflict so the unrequested-job TTL measures
+            // how long the winner signal has actually been outstanding.
             "INSERT INTO pending_pcs (orchestrator_pubkey, sub_task_id, job_json, attempts, created_at)
              VALUES (?1, ?2, ?3, 0, ?4)
              ON CONFLICT(orchestrator_pubkey, sub_task_id) DO UPDATE SET
                job_json = excluded.job_json,
-               attempts = 0,
-               created_at = excluded.created_at",
+               attempts = 0",
             params![orchestrator_pubkey, sub_task_id, job_json, now],
         )?;
         Ok(())
@@ -304,10 +306,35 @@ impl Storage {
         Ok(())
     }
 
+    pub fn get_pending_pcs(
+        &self,
+        orchestrator_pubkey: &str,
+        sub_task_id: &str,
+    ) -> anyhow::Result<Option<PendingPcs>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, orchestrator_pubkey, sub_task_id, job_json, attempts, created_at
+             FROM pending_pcs
+             WHERE orchestrator_pubkey = ?1 AND sub_task_id = ?2",
+        )?;
+        let mut rows = stmt.query(params![orchestrator_pubkey, sub_task_id])?;
+        match rows.next()? {
+            Some(row) => Ok(Some(PendingPcs {
+                id: row.get(0)?,
+                orchestrator_pubkey: row.get(1)?,
+                sub_task_id: row.get(2)?,
+                job_json: row.get(3)?,
+                attempts: row.get::<_, i64>(4)? as u32,
+                created_at: row.get(5)?,
+            })),
+            None => Ok(None),
+        }
+    }
+
     pub fn list_pending_pcs(&self) -> anyhow::Result<Vec<PendingPcs>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, orchestrator_pubkey, sub_task_id, job_json, attempts
+            "SELECT id, orchestrator_pubkey, sub_task_id, job_json, attempts, created_at
              FROM pending_pcs
              ORDER BY created_at ASC",
         )?;
@@ -320,11 +347,18 @@ impl Storage {
                     sub_task_id: row.get(2)?,
                     job_json: row.get(3)?,
                     attempts: row.get::<_, i64>(4)? as u32,
+                    created_at: row.get(5)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(rows)
+    }
+
+    pub fn delete_pending_pcs_by_id(&self, id: i64) -> anyhow::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM pending_pcs WHERE id = ?1", params![id])?;
+        Ok(())
     }
 
     pub fn increment_pending_pcs_attempts(&self, id: i64) -> anyhow::Result<()> {

@@ -70,11 +70,7 @@ async fn try_deliver_pending(
             );
             if payload.status == "success" {
                 if let Some(proof) = payload.proof.as_ref() {
-                    crate::application::pcs_outbox::enqueue_after_result(
-                        state.clone(),
-                        task,
-                        proof,
-                    );
+                    crate::application::pcs_outbox::retain_after_result(state.clone(), task, proof);
                 }
             }
             Ok(())
@@ -144,8 +140,9 @@ pub fn spawn_retry_loop(state: Arc<AppState>) {
                                 entry.attempts
                             );
                         }
-                        // PCS enqueue on retry path: decode proof from wire if possible is heavy;
-                        // worker already stored the task — load proof from task storage when present.
+                        // Retain the proof on the retry path too: decoding it from the
+                        // wire is cheap next to re-running compute if we are later
+                        // named slice proof winner.
                         if let Ok(Some(task)) = state
                             .storage
                             .load_task(&entry.orchestrator_pubkey, &entry.sub_task_id)
@@ -153,7 +150,7 @@ pub fn spawn_retry_loop(state: Arc<AppState>) {
                             if let Ok(Some(proof)) =
                                 extract_proof_from_result_wire(&entry.wire_body)
                             {
-                                crate::application::pcs_outbox::enqueue_after_result(
+                                crate::application::pcs_outbox::retain_after_result(
                                     state.clone(),
                                     &task,
                                     &proof,

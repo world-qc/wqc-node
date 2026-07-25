@@ -19,7 +19,7 @@ Operational details (env vars, Docker, troubleshooting) live in [`docs/OPERATION
 - **Swarm participation**: Subscribe to task announcements, submit signed bids, receive dispatches.
 - **Slice execution**: Forward pruned circuits to `wqc-core`, collect `complex_result` or `sample_result` + STARK `proof`.
 - **Result delivery**: Stream results back to the orchestrator on `/wqc/tensor-result/1.0.0`.
-- **Leaf PCS follow-up**: After result ACK, call core `POST /leaf_pcs` and stream `/wqc/tensor-pcs/1.0.0` (failures never roll back the result). An in-flight guard prevents duplicate concurrent proves; a successful build is cached in the PCS outbox so delivery retries only re-send. When core is unreachable, a health-gate backs off prove retries (cached PCS delivery still proceeds).
+- **Leaf PCS on request**: After result ACK the node only *retains* the proof. It calls core `POST /leaf_pcs` and streams `/wqc/tensor-pcs/1.0.0` when — and only when — the orchestrator names it slice proof winner over `/wqc/tensor-pcs-req/1.0.0`; that is the node that earns `R_pcs`. Losing nodes never pay the memory cost, and their retained proof is pruned after `WQC_PCS_UNREQUESTED_TTL_SECS`. Failures never roll back the result. An in-flight guard prevents duplicate concurrent proves; a successful build is cached in the PCS outbox so delivery retries only re-send. When core is unreachable, a health-gate backs off prove retries (cached PCS delivery still proceeds).
 - **Crash recovery**: Persist pending tasks in SQLite and resume after restart.
 - **Admin surface**: Expose `GET /status` and `GET /health` for local monitoring.
 
@@ -31,7 +31,8 @@ Orchestrator (libp2p :4001)
     │  Stream: /wqc/tensor-net/1.0.0      ← signed Bid
     │  Stream: /wqc/tensor-dispatch/1.0.0 → SubTask
     │  Stream: /wqc/tensor-result/1.0.0   ← Result + Proof
-    │  Stream: /wqc/tensor-pcs/1.0.0      ← Deferred LeafPcsBundle (optional)
+    │  Stream: /wqc/tensor-pcs-req/1.0.0  → LeafPcs request (proof winner only)
+    │  Stream: /wqc/tensor-pcs/1.0.0      ← Deferred LeafPcsBundle
     ▼
 wqc-node (libp2p :4002, HTTP admin :8080)
     │  POST /compute
@@ -50,7 +51,8 @@ The node runs **one sub-task at a time** per process. The orchestrator tracks in
 | `/wqc/tensor-net/1.0.0` | Node → Orchestrator | Signed lottery `Bid` |
 | `/wqc/tensor-dispatch/1.0.0` | Orchestrator → Node | `SubTask` for execution |
 | `/wqc/tensor-result/1.0.0` | Node → Orchestrator | `result_type` + `complex_result` + optional `sample_result` + `proof` + `work_report` |
-| `/wqc/tensor-pcs/1.0.0` | Node → Orchestrator | `sub_task_id` + `leaf_pcs_b64` (deferred PCS after result) |
+| `/wqc/tensor-pcs-req/1.0.0` | Orchestrator → Node | Signed `sub_task_id` + `node_id`: this node won the slice proof, build its leaf PCS |
+| `/wqc/tensor-pcs/1.0.0` | Node → Orchestrator | `sub_task_id` + `leaf_pcs_b64` (deferred PCS, winner only) |
 
 Wire formats match the [orchestrator README](../wqc-orchestrator/README.md#p2p-protocols-node-facing).
 
@@ -127,6 +129,8 @@ docker compose -f world-qc-docker/devnet/compose.yml up wqc-node-01
 | `WQC_HTTP_PORT` | no | `8080` | Admin API bind port. |
 | `WQC_DATABASE_URL` | no | `sqlite:wqc-node.db` | SQLite path (`sqlite:` prefix optional). |
 | `WQC_RESULT_RETRY_INTERVAL_SECS` | no | `5` | Background interval for retrying undelivered P2P results. |
+| `WQC_PCS_RETRY_INTERVAL_SECS` | no | `30` | Background interval for retrying requested-but-undelivered leaf PCS bundles. |
+| `WQC_PCS_UNREQUESTED_TTL_SECS` | no | `21600` | Drop a retained proof after this long with no PCS request (this node lost the proof-winner draw). |
 | `WQC_TASK_RETENTION_SECS` | no | `86400` | Delete `completed`/`failed` SQLite `tasks` older than this many seconds. `0` disables. |
 | `WQC_TASK_PRUNE_INTERVAL_SECS` | no | `3600` | Background interval for terminal-task prune. |
 
