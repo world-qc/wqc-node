@@ -31,6 +31,8 @@ pub struct NodeConfig {
     pub bootstrap_source_url: Option<String>,
     pub bootstrap_peers: Vec<String>,
     pub p2p_listen_port: u16,
+    /// libp2p idle connection timeout in seconds (`WQC_P2P_IDLE_TIMEOUT_SECS`, default 60).
+    pub p2p_idle_timeout_secs: u64,
     pub http_port: u16,
     pub database_url: String,
     pub stake_amount: BigInt,
@@ -90,6 +92,11 @@ impl NodeConfig {
             .parse()
             .context("WQC_P2P_LISTEN_PORT must be a valid u16")?;
 
+        let p2p_idle_timeout_secs = env::var("WQC_P2P_IDLE_TIMEOUT_SECS")
+            .unwrap_or_else(|_| "60".to_string())
+            .parse()
+            .context("WQC_P2P_IDLE_TIMEOUT_SECS must be a valid positive integer")?;
+
         let http_port = env::var("WQC_HTTP_PORT")
             .unwrap_or_else(|_| "8080".to_string())
             .parse()
@@ -145,6 +152,7 @@ impl NodeConfig {
             bootstrap_source_url: None,
             bootstrap_peers: Vec::new(),
             p2p_listen_port,
+            p2p_idle_timeout_secs,
             http_port,
             database_url,
             stake_amount,

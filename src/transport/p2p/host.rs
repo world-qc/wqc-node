@@ -149,6 +149,7 @@ pub fn spawn(config: NodeConfig, state: Arc<AppState>) {
 async fn run(config: NodeConfig, state: Arc<AppState>) -> anyhow::Result<()> {
     let keypair = libp2p_keypair_from_signing_key(&config.signing_key)?;
     let local_peer_id = keypair.public().to_peer_id();
+    let idle_timeout = Duration::from_secs(config.p2p_idle_timeout_secs);
 
     // Small star mesh: default D=6 never forms with a single bootstrap peer.
     let gossipsub_config = gossipsub::ConfigBuilder::default()
@@ -186,7 +187,7 @@ async fn run(config: NodeConfig, state: Arc<AppState>) -> anyhow::Result<()> {
                 stream: stream::Behaviour::new(),
             }
         })?
-        .with_swarm_config(|cfg| cfg.with_idle_connection_timeout(Duration::from_secs(60)))
+        .with_swarm_config(|cfg| cfg.with_idle_connection_timeout(idle_timeout))
         .build();
 
     let bid_protocol = StreamProtocol::new(bid::PROTOCOL_BID);

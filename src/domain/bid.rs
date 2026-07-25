@@ -227,6 +227,7 @@ mod tests {
             bootstrap_source_url: None,
             bootstrap_peers: vec![],
             p2p_listen_port: 0,
+            p2p_idle_timeout_secs: 60,
             http_port: 0,
             database_url: String::new(),
             stake_amount: BigInt::from(0),
