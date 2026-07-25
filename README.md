@@ -19,7 +19,7 @@ Operational details (env vars, Docker, troubleshooting) live in [`docs/OPERATION
 - **Swarm participation**: Subscribe to task announcements, submit signed bids, receive dispatches.
 - **Slice execution**: Forward pruned circuits to `wqc-core`, collect `complex_result` or `sample_result` + STARK `proof`.
 - **Result delivery**: Stream results back to the orchestrator on `/wqc/tensor-result/1.0.0`.
-- **Leaf PCS follow-up**: After result ACK, call core `POST /leaf_pcs` and stream `/wqc/tensor-pcs/1.0.0` (failures never roll back the result). An in-flight guard prevents duplicate concurrent proves; a successful build is cached in the PCS outbox so delivery retries only re-send.
+- **Leaf PCS follow-up**: After result ACK, call core `POST /leaf_pcs` and stream `/wqc/tensor-pcs/1.0.0` (failures never roll back the result). An in-flight guard prevents duplicate concurrent proves; a successful build is cached in the PCS outbox so delivery retries only re-send. When core is unreachable, a health-gate backs off prove retries (cached PCS delivery still proceeds).
 - **Crash recovery**: Persist pending tasks in SQLite and resume after restart.
 - **Admin surface**: Expose `GET /status` and `GET /health` for local monitoring.
 
@@ -121,6 +121,8 @@ docker compose -f world-qc-docker/devnet/compose.yml up wqc-node-01
 | `WQC_TESTNET_NODE_KEY` | testnet | — | Node Key from [testnet.world-qc.io](https://testnet.world-qc.io). Derives `operator_id` and signs `operator_sig` on bids. Required on public testnet. |
 | `WQC_MAX_MEMORY_GB` | no | `16` | WQC memory budget (GiB). Capped at host RAM minus 1/2 GiB reserve (`memory_budget.rs`). Derives `max_qubit_capability` as `floor(log2(budget / 16))` (dense `2^n × 16` envelope). |
 | `WQC_COMPUTE_TIMEOUT_SECS` | no | `300` | Timeout for `POST /compute` to core. |
+| `WQC_CORE_HEALTH_FAIL_THRESHOLD` | no | `3` | Consecutive unreachable core errors before opening the health-gate. |
+| `WQC_CORE_HEALTH_BACKOFF_SECS` | no | `30` | Seconds to skip core `/compute` and `/leaf_pcs` prove calls while the gate is open. |
 | `WQC_P2P_LISTEN_PORT` | no | `4002` | TCP/QUIC listen port for libp2p. |
 | `WQC_HTTP_PORT` | no | `8080` | Admin API bind port. |
 | `WQC_DATABASE_URL` | no | `sqlite:wqc-node.db` | SQLite path (`sqlite:` prefix optional). |

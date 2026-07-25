@@ -9,6 +9,13 @@ use crate::transport::p2p::pcs_delivery::{build_pcs_wire_body, send_pcs_wire};
 
 const DEFAULT_RETRY_INTERVAL_SECS: u64 = 30;
 
+fn is_core_down_error(err: &anyhow::Error) -> bool {
+    let msg = format!("{err:#}");
+    msg.contains("unhealthy (backoff)")
+        || msg.contains("health check failed")
+        || msg.contains("Failed to send leaf_pcs request to wqc-core")
+}
+
 /// Jobs currently running build-or-deliver for a sub_task.
 /// Without this, the retry loop starts a second prove while the first is in flight.
 static IN_FLIGHT: std::sync::OnceLock<Mutex<HashSet<String>>> = std::sync::OnceLock::new();
@@ -74,6 +81,12 @@ pub fn enqueue_after_result(state: Arc<AppState>, task: &ComputeTask, proof: &Pr
                     sub_task_id
                 );
             }
+            Ok(DeliverOutcome::SkippedCoreDown) => {
+                tracing::warn!(
+                    "[PCS Outbox] Initial PCS prove deferred for sub_task_id={} (wqc-core unhealthy)",
+                    sub_task_id
+                );
+            }
             Err(e) => {
                 tracing::warn!(
                     "[PCS Outbox] Initial PCS delivery failed for sub_task_id={} (queued for retry): {}",
@@ -89,6 +102,8 @@ pub fn enqueue_after_result(state: Arc<AppState>, task: &ComputeTask, proof: &Pr
 enum DeliverOutcome {
     Delivered,
     SkippedInFlight,
+    /// Core is in health-gate backoff; prove deferred (does not bump attempts).
+    SkippedCoreDown,
 }
 
 async fn try_build_and_deliver(
@@ -111,7 +126,17 @@ async fn try_build_and_deliver(
             );
             (cached, bytes)
         } else {
-            let pcs = state.core_client.build_leaf_pcs(job.proof.clone()).await?;
+            // Avoid hammering a dead core; cached PCS delivery still proceeds above.
+            if state.core_client.is_in_backoff() {
+                return Ok(DeliverOutcome::SkippedCoreDown);
+            }
+            let pcs = match state.core_client.build_leaf_pcs(job.proof.clone()).await {
+                Ok(pcs) => pcs,
+                Err(e) if is_core_down_error(&e) => {
+                    return Ok(DeliverOutcome::SkippedCoreDown);
+                }
+                Err(e) => return Err(e),
+            };
             job.leaf_pcs_b64 = Some(pcs.leaf_pcs_b64.clone());
             job.leaf_pcs_bytes = Some(pcs.bytes);
             // Persist before P2P send so a delivery failure does not force a re-prove.
@@ -205,6 +230,12 @@ pub fn spawn_retry_loop(state: Arc<AppState>) {
                     Ok(DeliverOutcome::SkippedInFlight) => {
                         tracing::debug!(
                             "[PCS Outbox] Retry skipped sub_task_id={} (build/deliver already in flight)",
+                            entry.sub_task_id
+                        );
+                    }
+                    Ok(DeliverOutcome::SkippedCoreDown) => {
+                        tracing::debug!(
+                            "[PCS Outbox] Retry deferred sub_task_id={} (wqc-core unhealthy)",
                             entry.sub_task_id
                         );
                     }
