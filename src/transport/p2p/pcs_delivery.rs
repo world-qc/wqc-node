@@ -37,6 +37,23 @@ pub fn build_pcs_wire_body(
         sub_task_id: sub_task_id.to_string(),
         node_id: node_id.to_string(),
         leaf_pcs_b64: leaf_pcs_b64.to_string(),
+        refused: false,
+        refuse_reason: None,
+    }
+    .to_json_bytes()
+}
+
+pub fn build_pcs_refusal_wire_body(
+    sub_task_id: &str,
+    node_id: &str,
+    reason: &str,
+) -> anyhow::Result<Vec<u8>> {
+    PcsMessage {
+        sub_task_id: sub_task_id.to_string(),
+        node_id: node_id.to_string(),
+        leaf_pcs_b64: String::new(),
+        refused: true,
+        refuse_reason: Some(reason.to_string()),
     }
     .to_json_bytes()
 }

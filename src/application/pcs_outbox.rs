@@ -5,7 +5,9 @@ use std::time::Duration;
 use crate::application::state::AppState;
 use crate::domain::models::{ComputeTask, Proof};
 use crate::domain::pcs::{PcsRequest, PendingPcsJob};
-use crate::transport::p2p::pcs_delivery::{build_pcs_wire_body, send_pcs_wire};
+use crate::transport::p2p::pcs_delivery::{
+    build_pcs_refusal_wire_body, build_pcs_wire_body, send_pcs_wire,
+};
 
 const DEFAULT_RETRY_INTERVAL_SECS: u64 = 30;
 /// Jobs the orchestrator never asked for are dropped after this long: the node
@@ -27,6 +29,22 @@ fn is_core_down_error(err: &anyhow::Error) -> bool {
     msg.contains("unhealthy (backoff)")
         || msg.contains("health check failed")
         || msg.contains("Failed to send leaf_pcs request to wqc-core")
+}
+
+/// PCS memory gate refuse (422): permanent; orch should compose-time fallback.
+fn is_pcs_memory_refuse(err: &anyhow::Error) -> bool {
+    let msg = format!("{err:#}");
+    msg.contains("PCS memory:") && msg.contains("policy=refuse")
+}
+
+fn pcs_refuse_reason(err: &anyhow::Error) -> String {
+    let msg = format!("{err:#}");
+    msg.lines()
+        .find(|l| l.contains("PCS memory:"))
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("PCS memory: refused")
+        .to_string()
 }
 
 /// Jobs currently running build-or-deliver for a sub_task.
@@ -199,6 +217,12 @@ fn spawn_build_and_deliver(
                     sub_task_id
                 );
             }
+            Ok(DeliverOutcome::RefusedPermanent) => {
+                tracing::info!(
+                    "[PCS Outbox] PCS permanently refused for sub_task_id={}; orch compose fallback",
+                    sub_task_id
+                );
+            }
             Err(e) => {
                 tracing::warn!(
                     "[PCS Outbox] PCS delivery failed for sub_task_id={} (queued for retry): {}",
@@ -216,6 +240,8 @@ enum DeliverOutcome {
     SkippedInFlight,
     /// Core is in health-gate backoff; prove deferred (does not bump attempts).
     SkippedCoreDown,
+    /// PCS memory gate refuse; refusal sent to orch, job cleared.
+    RefusedPermanent,
 }
 
 async fn try_build_and_deliver(
@@ -246,6 +272,24 @@ async fn try_build_and_deliver(
                 Ok(pcs) => pcs,
                 Err(e) if is_core_down_error(&e) => {
                     return Ok(DeliverOutcome::SkippedCoreDown);
+                }
+                Err(e) if is_pcs_memory_refuse(&e) => {
+                    let reason = pcs_refuse_reason(&e);
+                    let wire = build_pcs_refusal_wire_body(
+                        sub_task_id,
+                        &state.config.peer_id,
+                        &reason,
+                    )?;
+                    send_pcs_wire(state.clone(), &wire).await?;
+                    state
+                        .storage
+                        .delete_pending_pcs(orchestrator_pubkey, sub_task_id)?;
+                    tracing::warn!(
+                        "[PCS Outbox] Reported PCS refusal for sub_task_id={}: {}",
+                        sub_task_id,
+                        reason
+                    );
+                    return Ok(DeliverOutcome::RefusedPermanent);
                 }
                 Err(e) => return Err(e),
             };
@@ -372,6 +416,12 @@ pub fn spawn_retry_loop(state: Arc<AppState>) {
                     Ok(DeliverOutcome::SkippedCoreDown) => {
                         tracing::debug!(
                             "[PCS Outbox] Retry deferred sub_task_id={} (wqc-core unhealthy)",
+                            entry.sub_task_id
+                        );
+                    }
+                    Ok(DeliverOutcome::RefusedPermanent) => {
+                        tracing::info!(
+                            "[PCS Outbox] PCS refusal delivered for sub_task_id={}",
                             entry.sub_task_id
                         );
                     }

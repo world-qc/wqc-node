@@ -9,7 +9,13 @@ pub const PROTOCOL_PCS_REQUEST: &str = "/wqc/tensor-pcs-req/1.0.0";
 pub struct PcsMessage {
     pub sub_task_id: String,
     pub node_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub leaf_pcs_b64: String,
+    /// Winner permanently declines leaf PCS (e.g. memory gate refuse); orch compose fallback.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub refused: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refuse_reason: Option<String>,
 }
 
 impl PcsMessage {
@@ -111,5 +117,24 @@ mod tests {
         }}}"#;
         let job: PendingPcsJob = serde_json::from_str(json).expect("decode legacy job");
         assert!(!job.requested);
+    }
+
+    #[test]
+    fn pcs_refusal_message_serializes_refused_flag() {
+        let msg = PcsMessage {
+            sub_task_id: "t_090100".to_string(),
+            node_id: "12D3KooWnode".to_string(),
+            leaf_pcs_b64: String::new(),
+            refused: true,
+            refuse_reason: Some(
+                "PCS memory: estimate=3.57 GiB exceeds budget=2.00 GiB (policy=refuse)".into(),
+            ),
+        };
+        let json = serde_json::to_string(&msg).expect("serialize");
+        assert!(json.contains("\"refused\":true"));
+        assert!(json.contains("policy=refuse"));
+        let back: PcsMessage = serde_json::from_str(&json).expect("deserialize");
+        assert!(back.refused);
+        assert!(back.leaf_pcs_b64.is_empty());
     }
 }
