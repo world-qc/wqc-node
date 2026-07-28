@@ -5,7 +5,8 @@ use libp2p::PeerId;
 use libp2p_stream::{Control, IncomingStreams};
 use tokio::sync::Mutex;
 
-use crate::application::pcs_open_call::{should_bid_open_call, skip_bid_reason};
+use crate::application::pcs_open_call::{cache_open_call, should_bid_open_call, skip_bid_reason};
+use crate::application::state::AppState;
 use crate::config::NodeConfig;
 use crate::domain::pcs::{verify_pcs_open_call_signature, PcsOpenCallMessage};
 use crate::transport::p2p::pcs_bid_client::submit_pcs_open_call_bid;
@@ -15,6 +16,7 @@ use crate::transport::p2p::pcs_bid_client::submit_pcs_open_call_bid;
 pub fn spawn_pcs_open_handler(
     mut streams: IncomingStreams,
     control: Arc<Mutex<Control>>,
+    state: Arc<AppState>,
     config: NodeConfig,
     orchestrator_peer_id: PeerId,
 ) {
@@ -29,10 +31,12 @@ pub fn spawn_pcs_open_handler(
             }
 
             let control = control.clone();
+            let state = state.clone();
             let config = config.clone();
             tokio::spawn(async move {
                 if let Err(e) =
-                    handle_pcs_open_stream(control, config, orchestrator_peer_id, stream).await
+                    handle_pcs_open_stream(control, state, config, orchestrator_peer_id, stream)
+                        .await
                 {
                     tracing::warn!("[P2P PCS Open] Failed to handle open call: {}", e);
                 }
@@ -43,6 +47,7 @@ pub fn spawn_pcs_open_handler(
 
 async fn handle_pcs_open_stream(
     control: Arc<Mutex<Control>>,
+    state: Arc<AppState>,
     config: NodeConfig,
     orchestrator_peer_id: PeerId,
     mut stream: libp2p::Stream,
@@ -61,6 +66,11 @@ async fn handle_pcs_open_stream(
         .map_err(|e| anyhow::anyhow!("pcs open call rejected: {e}"))?;
 
     let open = &message.open_call;
+    // Always cache for spill nodes so a later pcs-req can fetch the CAS blob.
+    if config.pcs_memory_policy.is_spill() {
+        cache_open_call(&state, open.clone()).await;
+    }
+
     if !should_bid_open_call(&config, open) {
         tracing::debug!(
             "[P2P PCS Open] Skipping bid: {} sub_task_id={} policy={}",

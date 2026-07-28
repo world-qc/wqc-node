@@ -259,6 +259,7 @@ async fn run(config: NodeConfig, state: Arc<AppState>) -> anyhow::Result<()> {
     spawn_pcs_open_handler(
         pcs_open_incoming,
         bid_control.clone(),
+        state.clone(),
         config.clone(),
         orchestrator_peer_id,
     );

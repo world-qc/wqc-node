@@ -1,3 +1,4 @@
+use crate::application::state::AppState;
 use crate::config::NodeConfig;
 use crate::domain::pcs::{PcsMemoryPolicy, PcsOpenCall};
 
@@ -47,6 +48,33 @@ pub fn skip_bid_reason(config: &NodeConfig, open: &PcsOpenCall) -> &'static str 
         return "incomplete_open_call";
     }
     "unknown"
+}
+
+/// Cache the latest open-call announcement so a later pcs-req can fetch CAS.
+pub async fn cache_open_call(state: &AppState, open: PcsOpenCall) {
+    let key = open.sub_task_id.clone();
+    let mut cache = state.open_call_cache.lock().await;
+    cache.insert(key, open);
+}
+
+/// Lookup a cached open call for `sub_task_id`, optionally requiring hash match.
+pub async fn cached_open_call(
+    state: &AppState,
+    sub_task_id: &str,
+    leaf_proof_hash: &str,
+) -> Option<PcsOpenCall> {
+    let cache = state.open_call_cache.lock().await;
+    let open = cache.get(sub_task_id)?;
+    if !leaf_proof_hash.is_empty() && open.leaf_proof_hash != leaf_proof_hash {
+        return None;
+    }
+    Some(open.clone())
+}
+
+/// Remove a cached open call after permanent refusal / successful delivery.
+pub async fn clear_cached_open_call(state: &AppState, sub_task_id: &str) {
+    let mut cache = state.open_call_cache.lock().await;
+    cache.remove(sub_task_id);
 }
 
 #[cfg(test)]

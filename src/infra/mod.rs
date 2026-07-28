@@ -1,3 +1,4 @@
+pub mod cas_client;
 pub mod core_client;
 pub mod geoip;
 pub mod metrics;

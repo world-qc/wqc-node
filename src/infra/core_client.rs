@@ -187,6 +187,34 @@ impl WqcCoreClient {
 
     /// Deferred leaf PCS construction (after result delivery).
     pub async fn build_leaf_pcs(&self, proof: Proof) -> Result<LeafPcsResponse> {
+        self.post_leaf_pcs(LeafPcsRequest { proof }).await
+    }
+
+    /// Open-call builder path: CAS-fetched raw leaf STARK bytes → `/leaf_pcs`.
+    pub async fn build_leaf_pcs_from_proof_bytes(
+        &self,
+        proof_bytes: &[u8],
+        sub_task_id: &str,
+        node_id: &str,
+        slice_id: &str,
+    ) -> Result<LeafPcsResponse> {
+        use base64::{engine::general_purpose::STANDARD, Engine as _};
+
+        let proof = Proof {
+            public_inputs: crate::domain::models::PublicInputs {
+                circuit_id: String::new(),
+                sub_task_id: sub_task_id.to_string(),
+                node_id: node_id.to_string(),
+                slice_id: slice_id.to_string(),
+                output_result_hash: String::new(),
+                measurement_spec_hash: String::new(),
+            },
+            stark_proof_b64: STANDARD.encode(proof_bytes),
+        };
+        self.build_leaf_pcs(proof).await
+    }
+
+    async fn post_leaf_pcs(&self, body: LeafPcsRequest) -> Result<LeafPcsResponse> {
         self.ensure_ready().await?;
 
         let url = format!("{}/leaf_pcs", self.base_url);
@@ -194,7 +222,7 @@ impl WqcCoreClient {
             .client
             .post(&url)
             .timeout(self.pcs_timeout)
-            .json(&LeafPcsRequest { proof })
+            .json(&body)
             .send()
             .await
         {

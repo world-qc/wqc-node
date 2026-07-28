@@ -2,9 +2,11 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use crate::application::pcs_open_call::{cached_open_call, clear_cached_open_call};
 use crate::application::state::AppState;
-use crate::domain::models::{ComputeTask, Proof};
-use crate::domain::pcs::{PcsRequest, PendingPcsJob};
+use crate::domain::models::{ComputeTask, Proof, PublicInputs};
+use crate::domain::pcs::{OpenCallPcsSource, PcsRequest, PendingPcsJob};
+use crate::infra::cas_client;
 use crate::transport::p2p::pcs_delivery::{
     build_pcs_refusal_wire_body, build_pcs_wire_body, send_pcs_wire,
 };
@@ -37,14 +39,32 @@ fn is_pcs_memory_refuse(err: &anyhow::Error) -> bool {
     msg.contains("PCS memory:") && msg.contains("policy=refuse")
 }
 
+fn is_cas_hash_mismatch(err: &anyhow::Error) -> bool {
+    format!("{err:#}").contains("CAS leaf proof hash mismatch")
+}
+
 fn pcs_refuse_reason(err: &anyhow::Error) -> String {
     let msg = format!("{err:#}");
     msg.lines()
-        .find(|l| l.contains("PCS memory:"))
+        .find(|l| l.contains("PCS memory:") || l.contains("CAS leaf proof hash mismatch"))
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .unwrap_or("PCS memory: refused")
         .to_string()
+}
+
+fn placeholder_proof(sub_task_id: &str, node_id: &str, slice_id: &str) -> Proof {
+    Proof {
+        public_inputs: PublicInputs {
+            circuit_id: String::new(),
+            sub_task_id: sub_task_id.to_string(),
+            node_id: node_id.to_string(),
+            slice_id: slice_id.to_string(),
+            output_result_hash: String::new(),
+            measurement_spec_hash: String::new(),
+        },
+        stark_proof_b64: String::new(),
+    }
 }
 
 /// Jobs currently running build-or-deliver for a sub_task.
@@ -80,6 +100,7 @@ pub fn retain_after_result(state: Arc<AppState>, task: &ComputeTask, proof: &Pro
         requested: false,
         leaf_pcs_b64: None,
         leaf_pcs_bytes: None,
+        open_call: None,
     };
     // The result retry path can re-enter; never drop a won request or cached build.
     if let Ok(Some(entry)) = state
@@ -88,6 +109,7 @@ pub fn retain_after_result(state: Arc<AppState>, task: &ComputeTask, proof: &Pro
     {
         if let Ok(existing) = serde_json::from_slice::<PendingPcsJob>(&entry.job_json) {
             job.requested = existing.requested;
+            job.open_call = existing.open_call;
             if existing.leaf_pcs_b64.is_some() {
                 job.leaf_pcs_b64 = existing.leaf_pcs_b64;
                 job.leaf_pcs_bytes = existing.leaf_pcs_bytes;
@@ -119,12 +141,14 @@ pub fn retain_after_result(state: Arc<AppState>, task: &ComputeTask, proof: &Pro
     spawn_build_and_deliver(state, orchestrator_pubkey, sub_task_id, job);
 }
 
-/// Starts the leaf PCS build for a sub-task this node has been named winner of.
-///
-/// The orchestrator resolves quorum while acking our result, so the request can
-/// land a moment before [`retain_after_result`] has persisted the proof. Poll
-/// briefly rather than discarding a request we are about to be able to serve.
+/// Starts the leaf PCS build for a sub-task this node has been named winner of,
+/// or (open_call) the nominated CAS spill builder.
 pub fn handle_pcs_request(state: Arc<AppState>, orchestrator_pubkey: &str, request: &PcsRequest) {
+    if request.is_open_call() {
+        handle_open_call_pcs_request(state, orchestrator_pubkey, request);
+        return;
+    }
+
     let orchestrator_pubkey = orchestrator_pubkey.to_string();
     let sub_task_id = request.sub_task_id.clone();
 
@@ -196,6 +220,72 @@ pub fn handle_pcs_request(state: Arc<AppState>, orchestrator_pubkey: &str, reque
     });
 }
 
+fn handle_open_call_pcs_request(
+    state: Arc<AppState>,
+    orchestrator_pubkey: &str,
+    request: &PcsRequest,
+) {
+    let orchestrator_pubkey = orchestrator_pubkey.to_string();
+    let sub_task_id = request.sub_task_id.clone();
+    let leaf_proof_hash = request.leaf_proof_hash.clone();
+    let slice_id = request.slice_id.clone();
+
+    tokio::spawn(async move {
+        if leaf_proof_hash.is_empty() {
+            tracing::warn!(
+                "[PCS Outbox] Open-call PCS request missing leaf_proof_hash for sub_task_id={}",
+                sub_task_id
+            );
+            return;
+        }
+
+        let Some(open) = cached_open_call(&state, &sub_task_id, &leaf_proof_hash).await else {
+            tracing::warn!(
+                "[PCS Outbox] Open-call PCS request for sub_task_id={} hash={} but no matching cached announce",
+                sub_task_id,
+                leaf_proof_hash
+            );
+            return;
+        };
+
+        let job = PendingPcsJob {
+            sub_task_id: sub_task_id.clone(),
+            proof: placeholder_proof(&sub_task_id, &state.config.peer_id, &slice_id),
+            requested: true,
+            leaf_pcs_b64: None,
+            leaf_pcs_bytes: None,
+            open_call: Some(OpenCallPcsSource {
+                leaf_proof_hash: open.leaf_proof_hash.clone(),
+                cas_presigned_url: open.cas_presigned_url.clone(),
+                leaf_proof_bytes: open.leaf_proof_bytes,
+                slice_id: if slice_id.is_empty() {
+                    open.slice_id.clone()
+                } else {
+                    slice_id
+                },
+            }),
+        };
+
+        if let Err(e) = state
+            .storage
+            .upsert_pending_pcs(&orchestrator_pubkey, &sub_task_id, &job)
+        {
+            tracing::error!(
+                "[PCS Outbox] Failed to store open-call PCS job for sub_task_id={}: {}",
+                sub_task_id,
+                e
+            );
+            return;
+        }
+
+        tracing::info!(
+            "[PCS Outbox] Nominated open-call builder for sub_task_id={}; fetching CAS leaf proof",
+            sub_task_id
+        );
+        spawn_build_and_deliver(state, orchestrator_pubkey, sub_task_id, job);
+    });
+}
+
 fn spawn_build_and_deliver(
     state: Arc<AppState>,
     orchestrator_pubkey: String,
@@ -219,7 +309,7 @@ fn spawn_build_and_deliver(
             }
             Ok(DeliverOutcome::RefusedPermanent) => {
                 tracing::info!(
-                    "[PCS Outbox] PCS permanently refused for sub_task_id={}; orch compose fallback",
+                    "[PCS Outbox] PCS permanently refused for sub_task_id={}; orch will fail over / reopen",
                     sub_task_id
                 );
             }
@@ -240,7 +330,7 @@ enum DeliverOutcome {
     SkippedInFlight,
     /// Core is in health-gate backoff; prove deferred (does not bump attempts).
     SkippedCoreDown,
-    /// PCS memory gate refuse; refusal sent to orch, job cleared.
+    /// Permanent refuse (memory gate or CAS hash mismatch); refusal sent, job cleared.
     RefusedPermanent,
 }
 
@@ -268,31 +358,43 @@ async fn try_build_and_deliver(
             if state.core_client.is_in_backoff() {
                 return Ok(DeliverOutcome::SkippedCoreDown);
             }
-            let pcs = match state.core_client.build_leaf_pcs(job.proof.clone()).await {
-                Ok(pcs) => pcs,
-                Err(e) if is_core_down_error(&e) => {
-                    return Ok(DeliverOutcome::SkippedCoreDown);
+
+            let pcs = if let Some(open) = job.open_call.clone() {
+                match build_open_call_leaf_pcs(state.clone(), sub_task_id, &open).await {
+                    Ok(pcs) => pcs,
+                    Err(e) if is_core_down_error(&e) => {
+                        return Ok(DeliverOutcome::SkippedCoreDown);
+                    }
+                    Err(e) if is_pcs_memory_refuse(&e) || is_cas_hash_mismatch(&e) => {
+                        return report_permanent_refusal(
+                            state.clone(),
+                            orchestrator_pubkey,
+                            sub_task_id,
+                            &e,
+                        )
+                        .await;
+                    }
+                    Err(e) => return Err(e),
                 }
-                Err(e) if is_pcs_memory_refuse(&e) => {
-                    let reason = pcs_refuse_reason(&e);
-                    let wire = build_pcs_refusal_wire_body(
-                        sub_task_id,
-                        &state.config.peer_id,
-                        &reason,
-                    )?;
-                    send_pcs_wire(state.clone(), &wire).await?;
-                    state
-                        .storage
-                        .delete_pending_pcs(orchestrator_pubkey, sub_task_id)?;
-                    tracing::warn!(
-                        "[PCS Outbox] Reported PCS refusal for sub_task_id={}: {}",
-                        sub_task_id,
-                        reason
-                    );
-                    return Ok(DeliverOutcome::RefusedPermanent);
+            } else {
+                match state.core_client.build_leaf_pcs(job.proof.clone()).await {
+                    Ok(pcs) => pcs,
+                    Err(e) if is_core_down_error(&e) => {
+                        return Ok(DeliverOutcome::SkippedCoreDown);
+                    }
+                    Err(e) if is_pcs_memory_refuse(&e) => {
+                        return report_permanent_refusal(
+                            state.clone(),
+                            orchestrator_pubkey,
+                            sub_task_id,
+                            &e,
+                        )
+                        .await;
+                    }
+                    Err(e) => return Err(e),
                 }
-                Err(e) => return Err(e),
             };
+
             job.leaf_pcs_b64 = Some(pcs.leaf_pcs_b64.clone());
             job.leaf_pcs_bytes = Some(pcs.bytes);
             // Persist before P2P send so a delivery failure does not force a re-prove.
@@ -312,6 +414,9 @@ async fn try_build_and_deliver(
         state
             .storage
             .delete_pending_pcs(orchestrator_pubkey, sub_task_id)?;
+        if job.is_open_call() {
+            clear_cached_open_call(&state, sub_task_id).await;
+        }
         tracing::info!(
             "[PCS Outbox] Delivered leaf PCS for sub_task_id={} ({} bytes)",
             sub_task_id,
@@ -323,6 +428,66 @@ async fn try_build_and_deliver(
 
     release_inflight(sub_task_id);
     result
+}
+
+async fn build_open_call_leaf_pcs(
+    state: Arc<AppState>,
+    sub_task_id: &str,
+    open: &OpenCallPcsSource,
+) -> anyhow::Result<crate::infra::core_client::LeafPcsResponse> {
+    tracing::info!(
+        "[PCS Outbox] Fetching CAS leaf proof for sub_task_id={} hash={}",
+        sub_task_id,
+        open.leaf_proof_hash
+    );
+    let proof_bytes = cas_client::fetch_and_verify(
+        &state.http_client,
+        &open.cas_presigned_url,
+        &open.leaf_proof_hash,
+        if open.leaf_proof_bytes > 0 {
+            Some(open.leaf_proof_bytes)
+        } else {
+            None
+        },
+    )
+    .await?;
+
+    tracing::info!(
+        "[PCS Outbox] CAS leaf proof verified for sub_task_id={} ({} bytes); calling /leaf_pcs",
+        sub_task_id,
+        proof_bytes.len()
+    );
+
+    state
+        .core_client
+        .build_leaf_pcs_from_proof_bytes(
+            &proof_bytes,
+            sub_task_id,
+            &state.config.peer_id,
+            &open.slice_id,
+        )
+        .await
+}
+
+async fn report_permanent_refusal(
+    state: Arc<AppState>,
+    orchestrator_pubkey: &str,
+    sub_task_id: &str,
+    err: &anyhow::Error,
+) -> anyhow::Result<DeliverOutcome> {
+    let reason = pcs_refuse_reason(err);
+    let wire = build_pcs_refusal_wire_body(sub_task_id, &state.config.peer_id, &reason)?;
+    send_pcs_wire(state.clone(), &wire).await?;
+    state
+        .storage
+        .delete_pending_pcs(orchestrator_pubkey, sub_task_id)?;
+    clear_cached_open_call(&state, sub_task_id).await;
+    tracing::warn!(
+        "[PCS Outbox] Reported PCS refusal for sub_task_id={}: {}",
+        sub_task_id,
+        reason
+    );
+    Ok(DeliverOutcome::RefusedPermanent)
 }
 
 pub fn spawn_retry_loop(state: Arc<AppState>) {
@@ -444,4 +609,40 @@ pub fn spawn_retry_loop(state: Arc<AppState>) {
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::infra::cas_client::sha256_hex;
+
+    #[test]
+    fn cas_hash_mismatch_is_permanent_refuse_reason() {
+        let want = sha256_hex(b"a");
+        let err = cas_client::verify_cas_blob(b"b", &want).unwrap_err();
+        assert!(is_cas_hash_mismatch(&err));
+        let reason = pcs_refuse_reason(&err);
+        assert!(reason.contains("hash mismatch"));
+    }
+
+    #[test]
+    fn open_call_job_round_trips_source() {
+        let job = PendingPcsJob {
+            sub_task_id: "s".into(),
+            proof: placeholder_proof("s", "n", "01"),
+            requested: true,
+            leaf_pcs_b64: None,
+            leaf_pcs_bytes: None,
+            open_call: Some(OpenCallPcsSource {
+                leaf_proof_hash: "aa".into(),
+                cas_presigned_url: "https://x".into(),
+                leaf_proof_bytes: 3,
+                slice_id: "01".into(),
+            }),
+        };
+        let json = serde_json::to_vec(&job).unwrap();
+        let back: PendingPcsJob = serde_json::from_slice(&json).unwrap();
+        assert!(back.is_open_call());
+        assert_eq!(back.open_call.as_ref().unwrap().leaf_proof_bytes, 3);
+    }
 }

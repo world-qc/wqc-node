@@ -79,6 +79,7 @@ async fn main() -> anyhow::Result<()> {
         supported_gates,
         storage,
         p2p_stream_control: tokio::sync::Mutex::new(None),
+        open_call_cache: tokio::sync::Mutex::new(std::collections::HashMap::new()),
     });
 
     for task in pending_from_db {

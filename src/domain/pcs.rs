@@ -264,6 +264,9 @@ pub fn build_signed_pcs_bid(
 /// Job persisted after a result ACK, holding the proof the leaf PCS binds to.
 /// Proving only starts once the orchestrator names this node the slice proof
 /// winner, so a losing node never pays the memory cost of a bundle nobody uses.
+///
+/// Open-call builders set [`Self::open_call`] and fetch the leaf STARK from CAS
+/// instead of relying on a locally retained compute proof.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PendingPcsJob {
     pub sub_task_id: String,
@@ -276,6 +279,26 @@ pub struct PendingPcsJob {
     pub leaf_pcs_b64: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub leaf_pcs_bytes: Option<u64>,
+    /// Present for CAS open-call builder jobs (no local retained proof required).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_call: Option<OpenCallPcsSource>,
+}
+
+/// CAS binding for an open-call PCS build.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OpenCallPcsSource {
+    pub leaf_proof_hash: String,
+    pub cas_presigned_url: String,
+    #[serde(default)]
+    pub leaf_proof_bytes: u64,
+    #[serde(default)]
+    pub slice_id: String,
+}
+
+impl PendingPcsJob {
+    pub fn is_open_call(&self) -> bool {
+        self.open_call.is_some()
+    }
 }
 
 #[cfg(test)]
