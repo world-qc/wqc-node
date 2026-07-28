@@ -17,11 +17,12 @@ use crate::domain::bid;
 use crate::domain::p2p::{
     parse_signed_announcement, ANNOUNCEMENT_TOPIC, PROTOCOL_ANNOUNCE, PROTOCOL_DISPATCH,
 };
-use crate::domain::pcs::PROTOCOL_PCS_REQUEST;
+use crate::domain::pcs::{PROTOCOL_PCS_OPEN, PROTOCOL_PCS_REQUEST};
 use crate::domain::result::PROTOCOL_RESULT;
 use crate::transport::p2p::announce_handler::spawn_announce_handler;
 use crate::transport::p2p::bid_client::{spawn_incoming_stream_sink, BidClient};
 use crate::transport::p2p::dispatch_handler::spawn_dispatch_handler;
+use crate::transport::p2p::pcs_open_handler::spawn_pcs_open_handler;
 use crate::transport::p2p::pcs_request_handler::spawn_pcs_request_handler;
 
 const BOOTSTRAP_REDIAL_INITIAL: Duration = Duration::from_secs(1);
@@ -219,6 +220,10 @@ async fn run(config: NodeConfig, state: Arc<AppState>) -> anyhow::Result<()> {
         .accept(StreamProtocol::new(PROTOCOL_PCS_REQUEST))
         .map_err(|e| anyhow::anyhow!("failed to register pcs request stream protocol: {:?}", e))?;
 
+    let pcs_open_incoming = register_control
+        .accept(StreamProtocol::new(PROTOCOL_PCS_OPEN))
+        .map_err(|e| anyhow::anyhow!("failed to register pcs open stream protocol: {:?}", e))?;
+
     let bid_control = Arc::new(Mutex::new(swarm.behaviour().stream.new_control()));
     {
         let mut guard = state.p2p_stream_control.lock().await;
@@ -247,6 +252,13 @@ async fn run(config: NodeConfig, state: Arc<AppState>) -> anyhow::Result<()> {
     spawn_pcs_request_handler(
         pcs_request_incoming,
         state.clone(),
+        config.clone(),
+        orchestrator_peer_id,
+    );
+
+    spawn_pcs_open_handler(
+        pcs_open_incoming,
+        bid_control.clone(),
         config.clone(),
         orchestrator_peer_id,
     );

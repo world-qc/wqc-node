@@ -10,6 +10,39 @@ pub const PROTOCOL_PCS_BID: &str = "/wqc/tensor-pcs-bid/1.0.0";
 pub const PCS_REQUEST_KIND_OPEN_CALL: &str = "open_call";
 /// Only spill-policy nodes may bid on PCS open calls.
 pub const PCS_MEMORY_POLICY_SPILL: &str = "spill";
+pub const PCS_MEMORY_POLICY_REFUSE: &str = "refuse";
+
+/// Node-local PCS memory gate policy (`WQC_PCS_MEMORY_POLICY`).
+/// Spill nodes may bid on CAS open calls; refuse nodes must not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PcsMemoryPolicy {
+    Refuse,
+    Spill,
+}
+
+impl PcsMemoryPolicy {
+    pub fn from_env_str(raw: Option<&str>) -> Self {
+        match raw.map(str::trim).map(str::to_ascii_lowercase).as_deref() {
+            Some(PCS_MEMORY_POLICY_SPILL) => Self::Spill,
+            _ => Self::Refuse,
+        }
+    }
+
+    pub fn from_env() -> Self {
+        Self::from_env_str(std::env::var("WQC_PCS_MEMORY_POLICY").ok().as_deref())
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Refuse => PCS_MEMORY_POLICY_REFUSE,
+            Self::Spill => PCS_MEMORY_POLICY_SPILL,
+        }
+    }
+
+    pub fn is_spill(self) -> bool {
+        matches!(self, Self::Spill)
+    }
+}
 
 /// PCS follow-up message mirrored by the orchestrator P2P handler.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -76,6 +109,24 @@ pub struct PcsOpenCall {
     pub issued_at_unix: i64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub refused_builders: Vec<String>,
+}
+
+impl PcsOpenCall {
+    pub fn is_expired_at(&self, now_unix: i64) -> bool {
+        self.deadline_unix > 0 && now_unix >= self.deadline_unix
+    }
+
+    pub fn is_expired(&self) -> bool {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        self.is_expired_at(now)
+    }
+
+    pub fn refuses_builder(&self, node_id: &str) -> bool {
+        self.refused_builders.iter().any(|id| id == node_id)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -180,6 +231,34 @@ pub fn serialize_pcs_bid_payload(bid: &PcsBid) -> Vec<u8> {
     payload.extend_from_slice(bid.pcs_memory_policy.as_bytes());
     payload.extend_from_slice(&bid.issued_at_unix.to_be_bytes());
     payload
+}
+
+/// Builds a signed spill-policy open-call bid for `/wqc/tensor-pcs-bid/1.0.0`.
+pub fn build_signed_pcs_bid(
+    open: &PcsOpenCall,
+    node_id: &str,
+    signing_key: &ed25519_dalek::SigningKey,
+) -> PcsBidMessage {
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    use ed25519_dalek::Signer;
+
+    let issued_at_unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let bid = PcsBid {
+        sub_task_id: open.sub_task_id.clone(),
+        node_id: node_id.to_string(),
+        leaf_proof_hash: open.leaf_proof_hash.clone(),
+        pcs_memory_policy: PCS_MEMORY_POLICY_SPILL.to_string(),
+        issued_at_unix,
+    };
+    let signature = STANDARD.encode(
+        signing_key
+            .sign(&serialize_pcs_bid_payload(&bid))
+            .to_bytes(),
+    );
+    PcsBidMessage { bid, signature }
 }
 
 /// Job persisted after a result ACK, holding the proof the leaf PCS binds to.
@@ -351,5 +430,76 @@ mod tests {
         assert!(req.request_kind.is_empty());
         assert!(req.leaf_proof_hash.is_empty());
         assert!(!req.is_open_call());
+    }
+
+    #[test]
+    fn pcs_memory_policy_from_env_str() {
+        assert_eq!(
+            PcsMemoryPolicy::from_env_str(Some("spill")),
+            PcsMemoryPolicy::Spill
+        );
+        assert_eq!(
+            PcsMemoryPolicy::from_env_str(Some("SPILL")),
+            PcsMemoryPolicy::Spill
+        );
+        assert_eq!(
+            PcsMemoryPolicy::from_env_str(Some("refuse")),
+            PcsMemoryPolicy::Refuse
+        );
+        assert_eq!(PcsMemoryPolicy::from_env_str(None), PcsMemoryPolicy::Refuse);
+    }
+
+    #[test]
+    fn open_call_expiry_and_refused_builder() {
+        let call = PcsOpenCall {
+            parent_task_id: "parent".to_string(),
+            sub_task_id: "parent_01-sub".to_string(),
+            slice_id: "01".to_string(),
+            leaf_proof_hash: "aa".to_string(),
+            leaf_proof_bytes: 1,
+            cas_presigned_url: "https://x".to_string(),
+            r_pcs_planck: "1".to_string(),
+            deadline_unix: 100,
+            issued_at_unix: 0,
+            refused_builders: vec!["node-a".to_string()],
+        };
+        assert!(!call.is_expired_at(99));
+        assert!(call.is_expired_at(100));
+        assert!(call.refuses_builder("node-a"));
+        assert!(!call.refuses_builder("node-b"));
+    }
+
+    #[test]
+    fn build_signed_pcs_bid_is_spill_and_verifiable() {
+        use base64::{engine::general_purpose::STANDARD, Engine as _};
+        use ed25519_dalek::{Verifier, VerifyingKey};
+
+        let key = ed25519_dalek::SigningKey::from_bytes(&[7u8; 32]);
+        let open = PcsOpenCall {
+            parent_task_id: "parent".to_string(),
+            sub_task_id: "parent_01-sub".to_string(),
+            slice_id: "01".to_string(),
+            leaf_proof_hash: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                .to_string(),
+            leaf_proof_bytes: 10,
+            cas_presigned_url: "https://s3.example/blob".to_string(),
+            r_pcs_planck: "1".to_string(),
+            deadline_unix: 2_000_000_000,
+            issued_at_unix: 1_900_000_000,
+            refused_builders: vec![],
+        };
+        let msg = build_signed_pcs_bid(&open, "12D3KooWbuilder", &key);
+        assert!(msg.bid.is_spill_policy());
+        assert_eq!(msg.bid.node_id, "12D3KooWbuilder");
+        assert_eq!(msg.bid.leaf_proof_hash, open.leaf_proof_hash);
+
+        let sig = STANDARD.decode(&msg.signature).expect("sig b64");
+        let verifying = VerifyingKey::from(&key);
+        verifying
+            .verify(
+                &serialize_pcs_bid_payload(&msg.bid),
+                &ed25519_dalek::Signature::from_slice(&sig).expect("sig"),
+            )
+            .expect("verify");
     }
 }

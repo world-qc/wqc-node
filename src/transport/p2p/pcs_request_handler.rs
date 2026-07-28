@@ -64,9 +64,10 @@ async fn handle_pcs_request_stream(
     }
 
     tracing::info!(
-        "[P2P PCS Request] Accepted sub_task_id={} slice_id={}",
+        "[P2P PCS Request] Accepted sub_task_id={} slice_id={} open_call={}",
         message.request.sub_task_id,
-        message.request.slice_id
+        message.request.slice_id,
+        message.request.is_open_call()
     );
 
     pcs_outbox::handle_pcs_request(state, orchestrator_pubkey, &message.request);
