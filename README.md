@@ -19,7 +19,7 @@ Operational details (env vars, Docker, troubleshooting) live in [`docs/OPERATION
 - **Swarm participation**: Subscribe to task announcements, submit signed bids, receive dispatches.
 - **Slice execution**: Forward pruned circuits to `wqc-core`, collect `complex_result` or `sample_result` + STARK `proof`.
 - **Result delivery**: Stream results back to the orchestrator on `/wqc/tensor-result/1.0.0`.
-- **Leaf PCS on request**: After result ACK the node only *retains* the proof. It calls core `POST /leaf_pcs` and streams `/wqc/tensor-pcs/1.0.0` when — and only when — the orchestrator names it slice proof winner over `/wqc/tensor-pcs-req/1.0.0`; that is the node that earns `R_pcs`. Losing nodes never pay the memory cost, and their retained proof is pruned after `WQC_PCS_UNREQUESTED_TTL_SECS`. Failures never roll back the result. An in-flight guard prevents duplicate concurrent proves; a successful build is cached in the PCS outbox so delivery retries only re-send. When core is unreachable, a health-gate backs off prove retries (cached PCS delivery still proceeds).
+- **Leaf PCS (winner only)**: When the orchestrator names this node slice proof winner over `/wqc/tensor-pcs-req/1.0.0`, calls core `POST /leaf_pcs` and streams `/wqc/tensor-pcs/1.0.0`. Success earns `R_pcs`. Memory-gate **refuse** (HTTP 422) reports `refused: true` permanently (no retry). Non-winners' proofs are pruned after `WQC_PCS_UNREQUESTED_TTL_SECS`. An in-flight guard prevents duplicate concurrent proves; a successful build is cached in the PCS outbox so delivery retries only re-send. When core is unreachable, a health-gate backs off prove retries (cached PCS delivery still proceeds).
 - **Crash recovery**: Persist pending tasks in SQLite and resume after restart.
 - **Admin surface**: Expose `GET /status` and `GET /health` for local monitoring.
 
@@ -32,7 +32,7 @@ Orchestrator (libp2p :4001)
     │  Stream: /wqc/tensor-dispatch/1.0.0 → SubTask
     │  Stream: /wqc/tensor-result/1.0.0   ← Result + Proof
     │  Stream: /wqc/tensor-pcs-req/1.0.0  → LeafPcs request (proof winner only)
-    │  Stream: /wqc/tensor-pcs/1.0.0      ← Deferred LeafPcsBundle
+    │  Stream: /wqc/tensor-pcs/1.0.0      ← LeafPcsBundle (winner only)
     ▼
 wqc-node (libp2p :4002, HTTP admin :8080)
     │  POST /compute
@@ -52,14 +52,14 @@ The node runs **one sub-task at a time** per process. The orchestrator tracks in
 | `/wqc/tensor-dispatch/1.0.0` | Orchestrator → Node | `SubTask` for execution |
 | `/wqc/tensor-result/1.0.0` | Node → Orchestrator | `result_type` + `complex_result` + optional `sample_result` + `proof` + `work_report` |
 | `/wqc/tensor-pcs-req/1.0.0` | Orchestrator → Node | Signed `sub_task_id` + `node_id`: this node won the slice proof, build its leaf PCS |
-| `/wqc/tensor-pcs/1.0.0` | Node → Orchestrator | `sub_task_id` + `leaf_pcs_b64` (deferred PCS, winner only) |
+| `/wqc/tensor-pcs/1.0.0` | Node → Orchestrator | `sub_task_id` + `leaf_pcs_b64`, or `refused: true` (winner only) |
 
 Wire formats match the [orchestrator README](../wqc-orchestrator/README.md#p2p-protocols-node-facing).
 
-### Phase A: `sample_counts` (§3.4)
+### `sample_counts` (P2P)
 
-Signed `SubTask` may include `output_mode`, `shots`, `classical_bit_count`, and orchestrator-generated `sample_seed`. The node forwards these to `wqc-core` unchanged and returns `result_type` + `sample_result` on `/wqc/tensor-result/1.0.0`.
-`counts` bitstrings follow **Qiskit order** (rightmost = `cbit 0`). Scalar-only tasks are unchanged.
+Signed `SubTask` may include `output_mode`, `shots`, `classical_bit_count`, and orchestrator-generated `sample_seed`. The node forwards these to `wqc-core` and returns `result_type` + `sample_result` on `/wqc/tensor-result/1.0.0`.
+`counts` bitstrings follow **Qiskit order** (rightmost = `cbit 0`).
 
 ## Quick Start
 
@@ -164,7 +164,7 @@ Task ingress and results use **P2P only**—there is no `/submit` or webhook end
 
 ### Phase 2 — Operations & execution model
 
-- [x] **Phase A (§3.4)**: forward `output_mode`, `shots`, `classical_bit_count`, `sample_seed`; return `sample_result` on P2P
+- [x] Forward `output_mode`, `shots`, `classical_bit_count`, `sample_seed`; return `sample_result` on P2P
 - [x] Prometheus metrics (`GET /metrics` on the admin HTTP port)
 - [ ] Hardware tuning via `wqc-core` (CPU/GPU is a core concern)
 
