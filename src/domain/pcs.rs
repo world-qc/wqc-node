@@ -3,6 +3,13 @@ use serde::{Deserialize, Serialize};
 
 pub const PROTOCOL_PCS: &str = "/wqc/tensor-pcs/1.0.0";
 pub const PROTOCOL_PCS_REQUEST: &str = "/wqc/tensor-pcs-req/1.0.0";
+pub const PROTOCOL_PCS_OPEN: &str = "/wqc/tensor-pcs-open/1.0.0";
+pub const PROTOCOL_PCS_BID: &str = "/wqc/tensor-pcs-bid/1.0.0";
+
+/// Empty / omitted `request_kind` means nominated majority PCS request (v1-compatible).
+pub const PCS_REQUEST_KIND_OPEN_CALL: &str = "open_call";
+/// Only spill-policy nodes may bid on PCS open calls.
+pub const PCS_MEMORY_POLICY_SPILL: &str = "spill";
 
 /// PCS follow-up message mirrored by the orchestrator P2P handler.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -24,7 +31,7 @@ impl PcsMessage {
     }
 }
 
-/// Orchestrator → slice proof winner: build the deferred leaf PCS for one sub-task.
+/// Orchestrator → nominated node or open-call builder: build deferred leaf PCS.
 #[derive(Debug, Clone, Deserialize)]
 pub struct PcsRequest {
     pub sub_task_id: String,
@@ -36,11 +43,66 @@ pub struct PcsRequest {
     pub node_id: String,
     #[serde(default)]
     pub issued_at_unix: i64,
+    /// Empty = nominated/majority (v1-compatible). `"open_call"` = CAS builder.
+    #[serde(default)]
+    pub request_kind: String,
+    #[serde(default)]
+    pub leaf_proof_hash: String,
+}
+
+impl PcsRequest {
+    pub fn is_open_call(&self) -> bool {
+        self.request_kind == PCS_REQUEST_KIND_OPEN_CALL
+    }
 }
 
 #[derive(Debug, Deserialize)]
 pub struct PcsRequestMessage {
     pub request: PcsRequest,
+    pub signature: String,
+}
+
+/// Orchestrator open-call announcement (CAS-backed PCS builder market).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PcsOpenCall {
+    pub parent_task_id: String,
+    pub sub_task_id: String,
+    pub slice_id: String,
+    pub leaf_proof_hash: String,
+    pub leaf_proof_bytes: u64,
+    pub cas_presigned_url: String,
+    pub r_pcs_planck: String,
+    pub deadline_unix: i64,
+    pub issued_at_unix: i64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub refused_builders: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PcsOpenCallMessage {
+    pub open_call: PcsOpenCall,
+    pub signature: String,
+}
+
+/// Node → orchestrator offer to build PCS from a CAS leaf proof.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PcsBid {
+    pub sub_task_id: String,
+    pub node_id: String,
+    pub leaf_proof_hash: String,
+    pub pcs_memory_policy: String,
+    pub issued_at_unix: i64,
+}
+
+impl PcsBid {
+    pub fn is_spill_policy(&self) -> bool {
+        self.pcs_memory_policy == PCS_MEMORY_POLICY_SPILL
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PcsBidMessage {
+    pub bid: PcsBid,
     pub signature: String,
 }
 
@@ -52,6 +114,8 @@ pub fn serialize_pcs_request_payload(request: &PcsRequest) -> Vec<u8> {
     payload.extend_from_slice(request.slice_id.as_bytes());
     payload.extend_from_slice(request.node_id.as_bytes());
     payload.extend_from_slice(&request.issued_at_unix.to_be_bytes());
+    payload.extend_from_slice(request.request_kind.as_bytes());
+    payload.extend_from_slice(request.leaf_proof_hash.as_bytes());
     payload
 }
 
@@ -67,6 +131,55 @@ pub fn verify_pcs_request_signature(
         orchestrator_public_key_b64,
         "pcs request",
     )
+}
+
+/// Mirrors orchestrator `task.SerializePcsOpenCallPayload` byte layout exactly.
+pub fn serialize_pcs_open_call_payload(call: &PcsOpenCall) -> Vec<u8> {
+    let mut payload = Vec::new();
+    payload.extend_from_slice(call.parent_task_id.as_bytes());
+    payload.extend_from_slice(call.sub_task_id.as_bytes());
+    payload.extend_from_slice(call.slice_id.as_bytes());
+    payload.extend_from_slice(call.leaf_proof_hash.as_bytes());
+    payload.extend_from_slice(&call.leaf_proof_bytes.to_be_bytes());
+    payload.extend_from_slice(call.cas_presigned_url.as_bytes());
+    payload.extend_from_slice(call.r_pcs_planck.as_bytes());
+    payload.extend_from_slice(&call.deadline_unix.to_be_bytes());
+    payload.extend_from_slice(&call.issued_at_unix.to_be_bytes());
+
+    let mut refused = call.refused_builders.clone();
+    refused.sort();
+    payload.extend_from_slice(&(refused.len() as u32).to_be_bytes());
+    for id in refused {
+        let id_bytes = id.as_bytes();
+        payload.extend_from_slice(&(id_bytes.len() as u32).to_be_bytes());
+        payload.extend_from_slice(id_bytes);
+    }
+    payload
+}
+
+pub fn verify_pcs_open_call_signature(
+    call: &PcsOpenCall,
+    signature_b64: &str,
+    orchestrator_public_key_b64: &str,
+) -> Result<(), String> {
+    let payload = serialize_pcs_open_call_payload(call);
+    crate::domain::p2p::verify_orchestrator_signature(
+        &payload,
+        signature_b64,
+        orchestrator_public_key_b64,
+        "pcs open call",
+    )
+}
+
+/// Mirrors orchestrator `task.SerializePcsBidPayload` byte layout exactly.
+pub fn serialize_pcs_bid_payload(bid: &PcsBid) -> Vec<u8> {
+    let mut payload = Vec::new();
+    payload.extend_from_slice(bid.sub_task_id.as_bytes());
+    payload.extend_from_slice(bid.node_id.as_bytes());
+    payload.extend_from_slice(bid.leaf_proof_hash.as_bytes());
+    payload.extend_from_slice(bid.pcs_memory_policy.as_bytes());
+    payload.extend_from_slice(&bid.issued_at_unix.to_be_bytes());
+    payload
 }
 
 /// Job persisted after a result ACK, holding the proof the leaf PCS binds to.
@@ -98,6 +211,8 @@ mod tests {
             slice_id: "01".to_string(),
             node_id: "12D3KooWnode".to_string(),
             issued_at_unix: 1_700_000_000,
+            request_kind: String::new(),
+            leaf_proof_hash: String::new(),
         };
 
         let payload = serialize_pcs_request_payload(&request);
@@ -108,6 +223,91 @@ mod tests {
         expected.extend_from_slice(b"12D3KooWnode");
         expected.extend_from_slice(&1_700_000_000i64.to_be_bytes());
         assert_eq!(payload, expected);
+        assert!(!request.is_open_call());
+    }
+
+    #[test]
+    fn serialize_pcs_request_payload_open_call_appends_kind_and_hash() {
+        let hash = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let request = PcsRequest {
+            sub_task_id: "parent_01-sub".to_string(),
+            parent_task_id: "parent".to_string(),
+            slice_id: "01".to_string(),
+            node_id: "12D3KooWnode".to_string(),
+            issued_at_unix: 1_700_000_000,
+            request_kind: PCS_REQUEST_KIND_OPEN_CALL.to_string(),
+            leaf_proof_hash: hash.to_string(),
+        };
+
+        let payload = serialize_pcs_request_payload(&request);
+        let mut expected = Vec::new();
+        expected.extend_from_slice(b"parent_01-sub");
+        expected.extend_from_slice(b"parent");
+        expected.extend_from_slice(b"01");
+        expected.extend_from_slice(b"12D3KooWnode");
+        expected.extend_from_slice(&1_700_000_000i64.to_be_bytes());
+        expected.extend_from_slice(PCS_REQUEST_KIND_OPEN_CALL.as_bytes());
+        expected.extend_from_slice(hash.as_bytes());
+        assert_eq!(payload, expected);
+        assert!(request.is_open_call());
+    }
+
+    #[test]
+    fn serialize_pcs_open_call_payload_matches_orchestrator() {
+        let call = PcsOpenCall {
+            parent_task_id: "parent".to_string(),
+            sub_task_id: "parent_01-sub".to_string(),
+            slice_id: "01".to_string(),
+            leaf_proof_hash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                .to_string(),
+            leaf_proof_bytes: 42,
+            cas_presigned_url: "https://s3.example/blob".to_string(),
+            r_pcs_planck: "400000000000".to_string(),
+            deadline_unix: 1_700_001_800,
+            issued_at_unix: 1_700_000_000,
+            refused_builders: vec!["node-b".to_string(), "node-a".to_string()],
+        };
+
+        let payload = serialize_pcs_open_call_payload(&call);
+        let mut expected = Vec::new();
+        expected.extend_from_slice(b"parent");
+        expected.extend_from_slice(b"parent_01-sub");
+        expected.extend_from_slice(b"01");
+        expected.extend_from_slice(call.leaf_proof_hash.as_bytes());
+        expected.extend_from_slice(&42u64.to_be_bytes());
+        expected.extend_from_slice(b"https://s3.example/blob");
+        expected.extend_from_slice(b"400000000000");
+        expected.extend_from_slice(&1_700_001_800i64.to_be_bytes());
+        expected.extend_from_slice(&1_700_000_000i64.to_be_bytes());
+        expected.extend_from_slice(&2u32.to_be_bytes());
+        for id in ["node-a", "node-b"] {
+            let id_bytes = id.as_bytes();
+            expected.extend_from_slice(&(id_bytes.len() as u32).to_be_bytes());
+            expected.extend_from_slice(id_bytes);
+        }
+        assert_eq!(payload, expected);
+    }
+
+    #[test]
+    fn serialize_pcs_bid_payload_matches_orchestrator() {
+        let bid = PcsBid {
+            sub_task_id: "parent_01-sub".to_string(),
+            node_id: "12D3KooWbuilder".to_string(),
+            leaf_proof_hash: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+                .to_string(),
+            pcs_memory_policy: PCS_MEMORY_POLICY_SPILL.to_string(),
+            issued_at_unix: 1_700_000_100,
+        };
+
+        let payload = serialize_pcs_bid_payload(&bid);
+        let mut expected = Vec::new();
+        expected.extend_from_slice(bid.sub_task_id.as_bytes());
+        expected.extend_from_slice(bid.node_id.as_bytes());
+        expected.extend_from_slice(bid.leaf_proof_hash.as_bytes());
+        expected.extend_from_slice(PCS_MEMORY_POLICY_SPILL.as_bytes());
+        expected.extend_from_slice(&1_700_000_100i64.to_be_bytes());
+        assert_eq!(payload, expected);
+        assert!(bid.is_spill_policy());
     }
 
     #[test]
@@ -136,5 +336,20 @@ mod tests {
         let back: PcsMessage = serde_json::from_str(&json).expect("deserialize");
         assert!(back.refused);
         assert!(back.leaf_pcs_b64.is_empty());
+    }
+
+    #[test]
+    fn pcs_request_legacy_json_defaults_open_call_fields() {
+        let json = r#"{
+            "sub_task_id":"s",
+            "parent_task_id":"p",
+            "slice_id":"0",
+            "node_id":"n",
+            "issued_at_unix":1
+        }"#;
+        let req: PcsRequest = serde_json::from_str(json).expect("decode");
+        assert!(req.request_kind.is_empty());
+        assert!(req.leaf_proof_hash.is_empty());
+        assert!(!req.is_open_call());
     }
 }
