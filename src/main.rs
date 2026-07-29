@@ -181,6 +181,7 @@ fn print_startup_banner(
     }
 
     print_tn_engine_line(core_sysinfo);
+    print_core_pcs_policy_line(core_sysinfo);
     print_geo_line(node_geo);
 
     println!();
@@ -308,4 +309,20 @@ fn print_tn_engine_line(core_sysinfo: Option<&CoreSystemInfo>) {
             note.italic().bright_black()
         );
     }
+}
+
+fn print_core_pcs_policy_line(core_sysinfo: Option<&CoreSystemInfo>) {
+    let Some(info) = core_sysinfo else {
+        return;
+    };
+
+    let policy = info.pcs_memory_policy();
+    let label = match policy.as_str() {
+        "spill" => "spill (open-call builder eligible)"
+            .bright_green()
+            .to_string(),
+        _ => "refuse (no PCS open-call bids)".yellow().to_string(),
+    };
+
+    println!("  {}  {:15} {}", "●".blue(), "Core PCS RAM:".bold(), label);
 }

@@ -4,14 +4,23 @@ use crate::domain::pcs::{PcsMemoryPolicy, PcsOpenCall};
 
 /// Returns true when this node should bid on a CAS PCS open call.
 ///
-/// Only spill-policy nodes bid. Refuse-policy nodes stay silent so the
+/// Only spill-policy cores bid. Refuse-policy cores stay silent so the
 /// orchestrator never nominates a builder that will immediately memory-gate.
-pub fn should_bid_open_call(config: &NodeConfig, open: &PcsOpenCall) -> bool {
-    should_bid_open_call_at(config, open, unix_now())
+pub fn should_bid_open_call(
+    config: &NodeConfig,
+    core_policy: PcsMemoryPolicy,
+    open: &PcsOpenCall,
+) -> bool {
+    should_bid_open_call_at(config, core_policy, open, unix_now())
 }
 
-pub fn should_bid_open_call_at(config: &NodeConfig, open: &PcsOpenCall, now_unix: i64) -> bool {
-    if !config.pcs_memory_policy.is_spill() {
+pub fn should_bid_open_call_at(
+    config: &NodeConfig,
+    core_policy: PcsMemoryPolicy,
+    open: &PcsOpenCall,
+    now_unix: i64,
+) -> bool {
+    if !core_policy.is_spill() {
         return false;
     }
     if open.is_expired_at(now_unix) {
@@ -34,8 +43,12 @@ fn unix_now() -> i64 {
 }
 
 /// Reason string for debug logs when skipping a bid.
-pub fn skip_bid_reason(config: &NodeConfig, open: &PcsOpenCall) -> &'static str {
-    if config.pcs_memory_policy != PcsMemoryPolicy::Spill {
+pub fn skip_bid_reason(
+    config: &NodeConfig,
+    core_policy: PcsMemoryPolicy,
+    open: &PcsOpenCall,
+) -> &'static str {
+    if core_policy != PcsMemoryPolicy::Spill {
         return "policy=refuse";
     }
     if open.is_expired() {
@@ -48,6 +61,17 @@ pub fn skip_bid_reason(config: &NodeConfig, open: &PcsOpenCall) -> &'static str 
         return "incomplete_open_call";
     }
     "unknown"
+}
+
+/// Probe the connected wqc-core for its prove-time PCS memory gate policy.
+pub async fn fetch_core_pcs_memory_policy(state: &AppState) -> PcsMemoryPolicy {
+    match state.core_client.get_system_info().await {
+        Ok(info) => info.pcs_memory_policy(),
+        Err(err) => {
+            tracing::warn!("[PCS Open] Failed to fetch core sysinfo for pcs_memory_policy: {err}");
+            PcsMemoryPolicy::Refuse
+        }
+    }
 }
 
 /// Cache the latest open-call announcement so a later pcs-req can fetch CAS.
@@ -84,7 +108,7 @@ mod tests {
     use ed25519_dalek::SigningKey;
     use num_bigint::BigInt;
 
-    fn test_config(policy: PcsMemoryPolicy, peer_id: &str) -> NodeConfig {
+    fn test_config(peer_id: &str) -> NodeConfig {
         NodeConfig {
             peer_id: peer_id.to_string(),
             core_url: String::new(),
@@ -92,7 +116,6 @@ mod tests {
             max_memory_gib: 16.0,
             compute_timeout_secs: 300,
             pcs_timeout_secs: 7200,
-            pcs_memory_policy: policy,
             signing_key: SigningKey::from_bytes(&[1u8; 32]),
             bootstrap_urls: vec![],
             bootstrap_source_url: None,
@@ -127,31 +150,59 @@ mod tests {
 
     #[test]
     fn spill_bids_when_open_call_active() {
-        let cfg = test_config(PcsMemoryPolicy::Spill, "node-a");
+        let cfg = test_config("node-a");
         let open = sample_open(2_000_000_000, &[]);
-        assert!(should_bid_open_call_at(&cfg, &open, 1_900_000_000));
+        assert!(should_bid_open_call_at(
+            &cfg,
+            PcsMemoryPolicy::Spill,
+            &open,
+            1_900_000_000
+        ));
     }
 
     #[test]
     fn refuse_policy_skips_bid() {
-        let cfg = test_config(PcsMemoryPolicy::Refuse, "node-a");
+        let cfg = test_config("node-a");
         let open = sample_open(2_000_000_000, &[]);
-        assert!(!should_bid_open_call_at(&cfg, &open, 1_900_000_000));
-        assert_eq!(skip_bid_reason(&cfg, &open), "policy=refuse");
+        assert!(!should_bid_open_call_at(
+            &cfg,
+            PcsMemoryPolicy::Refuse,
+            &open,
+            1_900_000_000
+        ));
+        assert_eq!(
+            skip_bid_reason(&cfg, PcsMemoryPolicy::Refuse, &open),
+            "policy=refuse"
+        );
     }
 
     #[test]
     fn expired_open_call_skips_bid() {
-        let cfg = test_config(PcsMemoryPolicy::Spill, "node-a");
+        let cfg = test_config("node-a");
         let open = sample_open(1_700_000_000, &[]);
-        assert!(!should_bid_open_call_at(&cfg, &open, 1_700_000_000));
-        assert!(!should_bid_open_call_at(&cfg, &open, 1_700_000_001));
+        assert!(!should_bid_open_call_at(
+            &cfg,
+            PcsMemoryPolicy::Spill,
+            &open,
+            1_700_000_000
+        ));
+        assert!(!should_bid_open_call_at(
+            &cfg,
+            PcsMemoryPolicy::Spill,
+            &open,
+            1_700_000_001
+        ));
     }
 
     #[test]
     fn refused_builder_skips_bid() {
-        let cfg = test_config(PcsMemoryPolicy::Spill, "node-a");
+        let cfg = test_config("node-a");
         let open = sample_open(2_000_000_000, &["node-a"]);
-        assert!(!should_bid_open_call_at(&cfg, &open, 1_900_000_000));
+        assert!(!should_bid_open_call_at(
+            &cfg,
+            PcsMemoryPolicy::Spill,
+            &open,
+            1_900_000_000
+        ));
     }
 }

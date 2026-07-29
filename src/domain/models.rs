@@ -181,4 +181,11 @@ pub struct CoreSystemInfo {
     pub tn_backend_note: Option<String>,
     #[serde(default)]
     pub mps_max_bond_dim: usize,
+    /// Prove-time PCS RAM gate on the connected wqc-core (`WQC_PCS_MEMORY_POLICY`).
+    #[serde(default = "default_pcs_memory_policy")]
+    pub pcs_memory_policy: String,
+}
+
+fn default_pcs_memory_policy() -> String {
+    crate::domain::pcs::PCS_MEMORY_POLICY_REFUSE.to_string()
 }

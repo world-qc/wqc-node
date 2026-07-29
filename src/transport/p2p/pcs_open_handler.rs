@@ -5,14 +5,16 @@ use libp2p::PeerId;
 use libp2p_stream::{Control, IncomingStreams};
 use tokio::sync::Mutex;
 
-use crate::application::pcs_open_call::{cache_open_call, should_bid_open_call, skip_bid_reason};
+use crate::application::pcs_open_call::{
+    cache_open_call, fetch_core_pcs_memory_policy, should_bid_open_call, skip_bid_reason,
+};
 use crate::application::state::AppState;
 use crate::config::NodeConfig;
 use crate::domain::pcs::{verify_pcs_open_call_signature, PcsOpenCallMessage};
 use crate::transport::p2p::pcs_bid_client::submit_pcs_open_call_bid;
 
 /// Handles orchestrator CAS PCS open-call announcements.
-/// Spill-policy nodes bid; refuse-policy nodes stay silent.
+/// Spill-policy cores bid; refuse-policy cores stay silent.
 pub fn spawn_pcs_open_handler(
     mut streams: IncomingStreams,
     control: Arc<Mutex<Control>>,
@@ -66,17 +68,19 @@ async fn handle_pcs_open_stream(
         .map_err(|e| anyhow::anyhow!("pcs open call rejected: {e}"))?;
 
     let open = &message.open_call;
-    // Always cache for spill nodes so a later pcs-req can fetch the CAS blob.
-    if config.pcs_memory_policy.is_spill() {
+    let core_policy = fetch_core_pcs_memory_policy(&state).await;
+
+    // Always cache for spill cores so a later pcs-req can fetch the CAS blob.
+    if core_policy.is_spill() {
         cache_open_call(&state, open.clone()).await;
     }
 
-    if !should_bid_open_call(&config, open) {
+    if !should_bid_open_call(&config, core_policy, open) {
         tracing::debug!(
-            "[P2P PCS Open] Skipping bid: {} sub_task_id={} policy={}",
-            skip_bid_reason(&config, open),
+            "[P2P PCS Open] Skipping bid: {} sub_task_id={} core_policy={}",
+            skip_bid_reason(&config, core_policy, open),
             open.sub_task_id,
-            config.pcs_memory_policy.as_str()
+            core_policy.as_str()
         );
         return Ok(());
     }

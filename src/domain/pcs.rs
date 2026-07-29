@@ -12,8 +12,8 @@ pub const PCS_REQUEST_KIND_OPEN_CALL: &str = "open_call";
 pub const PCS_MEMORY_POLICY_SPILL: &str = "spill";
 pub const PCS_MEMORY_POLICY_REFUSE: &str = "refuse";
 
-/// Node-local PCS memory gate policy (`WQC_PCS_MEMORY_POLICY`).
-/// Spill nodes may bid on CAS open calls; refuse nodes must not.
+/// PCS memory gate policy reported by wqc-core `/sysinfo` and carried on PCS bids.
+/// Spill cores may bid on CAS open calls; refuse cores must not.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PcsMemoryPolicy {
     Refuse,
@@ -28,10 +28,6 @@ impl PcsMemoryPolicy {
         }
     }
 
-    pub fn from_env() -> Self {
-        Self::from_env_str(std::env::var("WQC_PCS_MEMORY_POLICY").ok().as_deref())
-    }
-
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Refuse => PCS_MEMORY_POLICY_REFUSE,
@@ -41,6 +37,12 @@ impl PcsMemoryPolicy {
 
     pub fn is_spill(self) -> bool {
         matches!(self, Self::Spill)
+    }
+}
+
+impl crate::domain::models::CoreSystemInfo {
+    pub fn pcs_memory_policy(&self) -> PcsMemoryPolicy {
+        PcsMemoryPolicy::from_env_str(Some(&self.pcs_memory_policy))
     }
 }
 

@@ -24,9 +24,6 @@ pub struct NodeConfig {
     pub compute_timeout_secs: u64,
     /// Wall-clock budget for deferred `POST /leaf_pcs` (default 7200s).
     pub pcs_timeout_secs: u64,
-    /// PCS memory gate policy (`WQC_PCS_MEMORY_POLICY`, default refuse).
-    /// Only `spill` nodes bid on CAS PCS open calls.
-    pub pcs_memory_policy: crate::domain::pcs::PcsMemoryPolicy,
     pub signing_key: SigningKey,
     /// Comma-separated bootstrap endpoint URLs from env (full path, failover order).
     pub bootstrap_urls: Vec<String>,
@@ -71,7 +68,6 @@ impl NodeConfig {
             .unwrap_or_else(|_| "7200".to_string())
             .parse()
             .context("WQC_PCS_TIMEOUT_SECS must be a valid positive integer")?;
-        let pcs_memory_policy = crate::domain::pcs::PcsMemoryPolicy::from_env();
         let signing_key = load_signing_key_from_env()?;
         let peer_id = libp2p_keypair_from_signing_key(&signing_key)?
             .public()
@@ -116,13 +112,12 @@ impl NodeConfig {
             })?;
 
         tracing::info!(
-            "Node Config Loaded: WQC memory budget = {:.2} GiB (requested {:.2} GiB, host total {} KiB) → max_qubits = {}, compute timeout = {}s, pcs_memory_policy = {}",
+            "Node Config Loaded: WQC memory budget = {:.2} GiB (requested {:.2} GiB, host total {} KiB) → max_qubits = {}, compute timeout = {}s",
             max_memory_gib,
             requested_memory_gib,
             total_physical_bytes / 1024,
             max_qubits,
             compute_timeout_secs,
-            pcs_memory_policy.as_str()
         );
         tracing::info!("Node libp2p PeerID: {}", peer_id);
         tracing::info!("Node bid stake: {} WQC ({} pWQC)", stake_wqc, stake_amount);
@@ -152,7 +147,6 @@ impl NodeConfig {
             max_memory_gib,
             compute_timeout_secs,
             pcs_timeout_secs,
-            pcs_memory_policy,
             signing_key,
             bootstrap_urls,
             bootstrap_source_url: None,
