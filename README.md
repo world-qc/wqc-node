@@ -19,7 +19,8 @@ Operational details (env vars, Docker, troubleshooting) live in [`docs/OPERATION
 - **Swarm participation**: Subscribe to task announcements, submit signed bids, receive dispatches.
 - **Slice execution**: Forward pruned circuits to `wqc-core`, collect `complex_result` or `sample_result` + STARK `proof`.
 - **Result delivery**: Stream results back to the orchestrator on `/wqc/tensor-result/1.0.0`.
-- **Leaf PCS (quorum candidate)**: When the orchestrator names this node via `/wqc/tensor-pcs-req/1.0.0`, calls core `POST /leaf_pcs` and streams `/wqc/tensor-pcs/1.0.0`. Success earns `R_pcs`. Memory-gate **refuse** (HTTP 422) reports `refused: true` permanently (no retry); the orchestrator may request another quorum majority node before compose fallback. Non-nominated nodes' proofs are pruned after `WQC_PCS_UNREQUESTED_TTL_SECS`. An in-flight guard prevents duplicate concurrent proves; a successful build is cached in the PCS outbox so delivery retries only re-send. When core is unreachable, a health-gate backs off prove retries (cached PCS delivery still proceeds).
+- **Leaf PCS (quorum candidate)**: When the orchestrator names this node via `/wqc/tensor-pcs-req/1.0.0`, calls core `POST /leaf_pcs` and streams `/wqc/tensor-pcs/1.0.0`. Success earns `R_pcs`. Memory-gate **refuse** (HTTP 422) reports `refused: true` permanently (no retry); the orchestrator may request another quorum majority node before open call or compose fallback. Non-nominated nodes' proofs are pruned after `WQC_PCS_UNREQUESTED_TTL_SECS`. An in-flight guard prevents duplicate concurrent proves; a successful build is cached in the PCS outbox so delivery retries only re-send. When core is unreachable, a health-gate backs off prove retries (cached PCS delivery still proceeds).
+- **PCS open call (spill builder)**: When majority PCS nomination is exhausted, the orchestrator publishes a CAS-backed open call on `/wqc/tensor-pcs-open/1.0.0`. Only nodes whose connected `wqc-core` reports `pcs_memory_policy=spill` via `GET /sysinfo` bid on `/wqc/tensor-pcs-bid/1.0.0`. If nominated (`request_kind=open_call`), the node fetches the leaf proof from CAS, verifies SHA-256, calls core `POST /leaf_pcs`, and streams the bundle. Open-call builders need not retain the proof locally.
 - **Crash recovery**: Persist pending tasks in SQLite and resume after restart.
 - **Admin surface**: Expose `GET /status` and `GET /health` for local monitoring.
 
@@ -31,8 +32,10 @@ Orchestrator (libp2p :4001)
     │  Stream: /wqc/tensor-net/1.0.0      ← signed Bid
     │  Stream: /wqc/tensor-dispatch/1.0.0 → SubTask
     │  Stream: /wqc/tensor-result/1.0.0   ← Result + Proof
-    │  Stream: /wqc/tensor-pcs-req/1.0.0  → LeafPcs request (proof winner only)
-    │  Stream: /wqc/tensor-pcs/1.0.0      ← LeafPcsBundle (winner only)
+    │  Stream: /wqc/tensor-pcs-req/1.0.0  → LeafPcs request (majority or open-call builder)
+    │  Stream: /wqc/tensor-pcs/1.0.0      ← LeafPcsBundle (nominated node only)
+    │  Stream: /wqc/tensor-pcs-open/1.0.0 → CAS open-call announcement
+    │  Stream: /wqc/tensor-pcs-bid/1.0.0  ← spill-policy open-call bid
     ▼
 wqc-node (libp2p :4002, HTTP admin :8080)
     │  POST /compute
@@ -51,8 +54,20 @@ The node runs **one sub-task at a time** per process. The orchestrator tracks in
 | `/wqc/tensor-net/1.0.0` | Node → Orchestrator | Signed lottery `Bid` |
 | `/wqc/tensor-dispatch/1.0.0` | Orchestrator → Node | `SubTask` for execution |
 | `/wqc/tensor-result/1.0.0` | Node → Orchestrator | `result_type` + `complex_result` + optional `sample_result` + `proof` + `work_report` |
-| `/wqc/tensor-pcs-req/1.0.0` | Orchestrator → Node | Signed `sub_task_id` + `node_id`: this node won the slice proof, build its leaf PCS |
-| `/wqc/tensor-pcs/1.0.0` | Node → Orchestrator | `sub_task_id` + `leaf_pcs_b64`, or `refused: true` (winner only) |
+| `/wqc/tensor-pcs-req/1.0.0` | Orchestrator → Node | Signed PCS build request (majority nominee or open-call builder) |
+| `/wqc/tensor-pcs/1.0.0` | Node → Orchestrator | `sub_task_id` + `leaf_pcs_b64`, or `refused: true` (nominated node only) |
+| `/wqc/tensor-pcs-open/1.0.0` | Orchestrator → Node | Signed CAS-backed PCS open-call announcement |
+| `/wqc/tensor-pcs-bid/1.0.0` | Node → Orchestrator | Spill-policy bid (`pcs_memory_policy=spill`) |
+
+### PCS open-call eligibility
+
+Open-call bids are gated by the **connected core**, not node-local env:
+
+1. On each open-call announcement, the node probes `wqc-core` `GET /sysinfo`.
+2. Bid only when `pcs_memory_policy == "spill"`.
+3. Set `WQC_PCS_MEMORY_POLICY=spill` on **wqc-core** (not on wqc-node).
+
+Remote-core deployments (`WQC_CORE_URL` pointing at another host) therefore bid according to that core's policy, avoiding env drift where a node bids but its core refuses `/leaf_pcs`.
 
 Wire formats match the [orchestrator README](../wqc-orchestrator/README.md#p2p-protocols-node-facing).
 
@@ -131,6 +146,7 @@ docker compose -f world-qc-docker/devnet/compose.yml up wqc-node-01
 | `WQC_RESULT_RETRY_INTERVAL_SECS` | no | `5` | Background interval for retrying undelivered P2P results. |
 | `WQC_PCS_RETRY_INTERVAL_SECS` | no | `30` | Background interval for retrying requested-but-undelivered leaf PCS bundles. |
 | `WQC_PCS_UNREQUESTED_TTL_SECS` | no | `21600` | Drop a retained proof after this long with no PCS request (this node lost the proof-winner draw). |
+| `WQC_PCS_TIMEOUT_SECS` | no | `7200` | Wall-clock budget for core `POST /leaf_pcs` (open-call builds included). |
 | `WQC_TASK_RETENTION_SECS` | no | `86400` | Delete `completed`/`failed` SQLite `tasks` older than this many seconds. `0` disables. |
 | `WQC_TASK_PRUNE_INTERVAL_SECS` | no | `3600` | Background interval for terminal-task prune. |
 
