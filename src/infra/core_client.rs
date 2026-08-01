@@ -208,6 +208,7 @@ impl WqcCoreClient {
                 slice_id: slice_id.to_string(),
                 output_result_hash: String::new(),
                 measurement_spec_hash: String::new(),
+                security_level: String::new(),
             },
             stark_proof_b64: STANDARD.encode(proof_bytes),
         };

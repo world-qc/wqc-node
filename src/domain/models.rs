@@ -50,6 +50,9 @@ pub struct ComputeRequest {
     pub observables: Vec<ObservableSpec>,
     #[serde(default)]
     pub noise_model: Option<NoiseModel>,
+    /// Orchestrator security tier (`low|normal|high|ultra`); empty → FRI default.
+    #[serde(default)]
+    pub security_level: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -90,6 +93,8 @@ pub struct PublicInputs {
     pub output_result_hash: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub measurement_spec_hash: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub security_level: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

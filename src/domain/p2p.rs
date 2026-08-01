@@ -56,6 +56,8 @@ pub struct SubTask {
     pub observables: Vec<ObservableSpec>,
     #[serde(default)]
     pub noise_model: Option<crate::domain::models::NoiseModel>,
+    #[serde(default)]
+    pub security_level: String,
 }
 
 /// Mirrors orchestrator `bid.SerializeAnnouncementPayload` byte layout exactly.
@@ -139,6 +141,10 @@ pub fn serialize_dispatch_payload(sub_task: &SubTask) -> Result<Vec<u8>, String>
     for q in site_order {
         payload.extend_from_slice(&q.to_be_bytes());
     }
+
+    let security_level = sub_task.security_level.as_bytes();
+    payload.extend_from_slice(&(security_level.len() as u32).to_be_bytes());
+    payload.extend_from_slice(security_level);
 
     Ok(payload)
 }
@@ -283,6 +289,7 @@ impl SubTask {
             },
             observables: self.observables,
             noise_model: self.noise_model,
+            security_level: self.security_level,
         }
     }
 }
@@ -359,6 +366,7 @@ mod tests {
         expected.extend_from_slice(&2u32.to_be_bytes()); // observables_json_len
         expected.extend_from_slice(b"[]"); // observables_json
         expected.extend_from_slice(&0u32.to_be_bytes()); // mps_site_order_len
+        expected.extend_from_slice(&0u32.to_be_bytes()); // security_level_len
         assert_eq!(payload, expected);
     }
 
@@ -397,6 +405,7 @@ mod tests {
         tail.extend_from_slice(&(obs_json.len() as u32).to_be_bytes());
         tail.extend_from_slice(obs_json);
         tail.extend_from_slice(&0u32.to_be_bytes()); // mps_site_order_len
+        tail.extend_from_slice(&0u32.to_be_bytes()); // security_level_len
         assert!(payload.ends_with(&tail));
     }
 
@@ -419,6 +428,26 @@ mod tests {
         want_suffix.extend_from_slice(&2u32.to_be_bytes());
         want_suffix.extend_from_slice(&1u32.to_be_bytes());
         want_suffix.extend_from_slice(&0u32.to_be_bytes());
+        want_suffix.extend_from_slice(&0u32.to_be_bytes()); // security_level_len
+        assert!(payload.ends_with(&want_suffix));
+    }
+
+    #[test]
+    fn serialize_dispatch_payload_includes_security_level() {
+        let sub_task = SubTask {
+            task_id: "s".to_string(),
+            parent_task_id: "p".to_string(),
+            circuit_id: "c".to_string(),
+            qubit_count: 2,
+            original_qubit_count: 2,
+            slice_id: "0".to_string(),
+            security_level: "low".to_string(),
+            ..Default::default()
+        };
+        let payload = serialize_dispatch_payload(&sub_task).expect("serialize");
+        let mut want_suffix = Vec::new();
+        want_suffix.extend_from_slice(&3u32.to_be_bytes());
+        want_suffix.extend_from_slice(b"low");
         assert!(payload.ends_with(&want_suffix));
     }
 }
