@@ -108,20 +108,16 @@ fn ensure_orchestrator_gossip_subscription(
 /// Drop local gossip interest when the orchestrator link is fully gone so the next
 /// dial sends a fresh SUBSCRIBE control message (go-libp2p only tracks live subscriptions).
 fn unsubscribe_orchestrator_announcements(swarm: &mut Swarm<NodeBehaviour>, topic: &IdentTopic) {
-    match swarm.behaviour_mut().gossipsub.unsubscribe(topic) {
-        Ok(true) => tracing::info!(
+    if swarm.behaviour_mut().gossipsub.unsubscribe(topic) {
+        tracing::info!(
             "[P2P Gossip] Unsubscribed from {} after orchestrator disconnect",
             ANNOUNCEMENT_TOPIC
-        ),
-        Ok(false) => tracing::debug!(
+        );
+    } else {
+        tracing::debug!(
             "[P2P Gossip] Already unsubscribed from {}",
             ANNOUNCEMENT_TOPIC
-        ),
-        Err(e) => tracing::warn!(
-            "[P2P Gossip] Unsubscribe from {} failed: {:?}",
-            ANNOUNCEMENT_TOPIC,
-            e
-        ),
+        );
     }
 }
 
@@ -267,7 +263,6 @@ async fn run(config: NodeConfig, state: Arc<AppState>) -> anyhow::Result<()> {
     let tcp_addr: Multiaddr = format!("/ip4/0.0.0.0/tcp/{}", config.p2p_listen_port).parse()?;
     let quic_addr: Multiaddr =
         format!("/ip4/0.0.0.0/udp/{}/quic-v1", config.p2p_listen_port).parse()?;
-
     swarm.listen_on(tcp_addr)?;
     swarm.listen_on(quic_addr)?;
 
