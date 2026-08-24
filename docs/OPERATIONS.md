@@ -229,7 +229,7 @@ Values only refresh when the node wins/submits another bid, so watch `metrics_ag
 
 `GET /metrics` on the admin HTTP port (default `8080`) still exposes the full `wqc_node_*` catalog for local debugging. Devnet may scrape `wqc-node-*:8080` directly; public miners should not need to expose this port.
 
-The node only declares stake in bids. Balance, rewards, and burns are handled by the orchestrator Redis ledger. See `wqc-orchestrator/docs/ECONOMICS.md`.
+The node only declares stake in bids. Balance, rewards, and burns are handled by the orchestrator Redis ledger. See [architecture-current §4](https://github.com/world-qc/wqc-docs/blob/main/spec/architecture-current.md#4-off-chain-economy-live).
 
 For public participants, this means:
 
@@ -274,5 +274,5 @@ For public participants, this means:
 ## Related docs
 
 - [wqc-orchestrator README — P2P protocols](../../wqc-orchestrator/README.md#p2p-protocols-node-facing)
-- [wqc-orchestrator ECONOMICS](../../wqc-orchestrator/docs/ECONOMICS.md)
+- [architecture-current — off-chain economy](https://github.com/world-qc/wqc-docs/blob/main/spec/architecture-current.md#4-off-chain-economy-live)
 - [whitepaper_gap.md](../whitepaper_gap.md) — WP vs implementation gaps
