@@ -69,7 +69,8 @@ Open-call bids are gated by the **connected core**, not node-local env:
 
 Remote-core deployments (`WQC_CORE_URL` pointing at another host) therefore bid according to that core's policy, avoiding env drift where a node bids but its core refuses `/leaf_pcs`.
 
-Wire formats match the [orchestrator README](../wqc-orchestrator/README.md#p2p-protocols-node-facing).
+Wire formats — framing, signature payload layouts, and message shapes — are normative in
+[`p2p-protocols.md`](https://github.com/world-qc/wqc-docs/blob/main/spec/p2p-protocols.md).
 
 ### `sample_counts` (P2P)
 
