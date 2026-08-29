@@ -157,6 +157,9 @@ docker compose -f world-qc-docker/devnet/compose.yml up wqc-node-01
 | :--- | :--- |
 | `GET /health` | `{"status":"UP"}` |
 | `GET /status` | Pending compute tasks, **outbox** pending results, `max_qubits`, `max_memory_gib`, core sysinfo, supported gates |
+| `GET /metrics` | Prometheus exposition format |
+
+`GET /status` reads `system_memory_used_kb`, `system_memory_total_kb`, and `cpu_usage_percent` from the connected `wqc-core` `GET /sysinfo`. **If core is unreachable the node still answers `200` with those three fields zeroed** instead of failing, so a monitor cannot tell a dead core from a genuine reading. The fetch failure is only written to the node log; no metric covers it (`wqc_node_core_requests_total` counts `POST /compute` outcomes, not this call). Poll core's own `/health` if you need to distinguish the two.
 
 Task ingress and results use **P2P only**—there is no `/submit` or webhook endpoint on the node.
 
