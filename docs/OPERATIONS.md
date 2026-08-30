@@ -190,7 +190,7 @@ Reference five-node Docker layout: [wqc-docs `examples/E2E.md`](https://github.c
 - `WQC_NODE_STAKE_WQC=0.05` on all nodes.
 - `WQC_MAX_MEMORY_GB=1` is a reasonable small-host dev/test setting.
 
-Requires a monorepo checkout with sibling repos; see the compose file header comment. Rebuild after code changes:
+Requires separate checkouts of sibling repos under one parent directory; see the compose file header comment. Rebuild after code changes:
 
 ```bash
 docker compose -f examples/compose.yml build wqc-node-01

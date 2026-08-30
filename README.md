@@ -105,7 +105,7 @@ cargo run --release
 
 ### Multi-node E2E (developers)
 
-For a five-node reference stack (orchestrator, Redis, object store, cores, nodes), see [wqc-docs `examples/E2E.md`](https://github.com/world-qc/wqc-docs/blob/main/examples/E2E.md) and [`examples/compose.yml`](https://github.com/world-qc/wqc-docs/blob/main/examples/compose.yml). Requires a monorepo checkout with sibling repos (`wqc-core`, `wqc-orchestrator`, etc.).
+For a five-node reference stack (orchestrator, Redis, object store, cores, nodes), see [wqc-docs `examples/E2E.md`](https://github.com/world-qc/wqc-docs/blob/main/examples/E2E.md) and [`examples/compose.yml`](https://github.com/world-qc/wqc-docs/blob/main/examples/compose.yml). Requires separate checkouts of sibling repos (`wqc-core`, `wqc-orchestrator`, etc.) under one parent directory.
 
 Typical node env in that layout:
 
