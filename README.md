@@ -1,26 +1,36 @@
 # wqc-node (The Swarm Agent)
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
-[![Status: Alpha](https://img.shields.io/badge/Status-Alpha-yellow.svg)]()
+[![Status: Beta](https://img.shields.io/badge/Status-Beta-orange.svg)]()
 [![CI](https://github.com/world-qc/wqc-node/actions/workflows/ci.yml/badge.svg)](https://github.com/world-qc/wqc-node/actions/workflows/ci.yml)
 
 **Become the Computer.** `wqc-node` connects your local `wqc-core` engine to the World Quantum Computer (WQC) swarm over **libp2p**. It participates in the permissionless bid lottery, executes slice sub-tasks, and returns zk-STARK proofs via P2P streams.
 
-Operational details (env vars, Docker, troubleshooting) live in [`docs/OPERATIONS.md`](docs/OPERATIONS.md).
+Operational details (env vars, troubleshooting) live in [`docs/OPERATIONS.md`](docs/OPERATIONS.md).
+
+## Role in the WQC pipeline
+
+```
+client → wqc-orchestrator → wqc-node (this repo) → wqc-core
+```
+
+On public testnet, most operators run **[`wqc-miner`](https://github.com/world-qc/wqc-miner)**, which starts `wqc-node` and `wqc-core` together and injects env from `settings.toml`. Direct `cargo run` of this repo is for development, headless servers, and integration testing.
+
+Task lifecycle (announce → bid → dispatch → compute → result) is normative in [wqc-docs `spec/architecture-current.md` §3](https://github.com/world-qc/wqc-docs/blob/main/spec/architecture-current.md#3-task-lifecycle).
 
 ## Why Run a Node?
 
 - **Democratize Quantum Access**: Contribute consumer hardware to a distributed simulation network.
 - **Proof of Useful Work**: Compute real quantum circuits and STARK proofs—not meaningless hashes.
-- **Fair Rewards**: Participation-based distribution (settlement is handled by the orchestrator today; on-chain claims are Phase 3).
+- **Fair Rewards**: Participation-based distribution (settlement is orchestrator-side today; on-chain claims are planned).
 
 ## Core Responsibilities
 
 - **Swarm participation**: Subscribe to task announcements, submit signed bids, receive dispatches.
 - **Slice execution**: Forward pruned circuits to `wqc-core`, collect `complex_result` or `sample_result` + STARK `proof`.
 - **Result delivery**: Stream results back to the orchestrator on `/wqc/tensor-result/1.0.0`.
-- **Leaf PCS (quorum candidate)**: When the orchestrator names this node via `/wqc/tensor-pcs-req/1.0.0`, calls core `POST /leaf_pcs` and streams `/wqc/tensor-pcs/1.0.0`. Success earns `R_pcs`. Memory-gate **refuse** (HTTP 422) reports `refused: true` permanently (no retry); the orchestrator may request another quorum majority node before open call or compose fallback. Non-nominated nodes' proofs are pruned after `WQC_PCS_UNREQUESTED_TTL_SECS`. An in-flight guard prevents duplicate concurrent proves; a successful build is cached in the PCS outbox so delivery retries only re-send. When core is unreachable, a health-gate backs off prove retries (cached PCS delivery still proceeds).
-- **PCS open call (spill builder)**: When majority PCS nomination is exhausted, the orchestrator publishes a CAS-backed open call on `/wqc/tensor-pcs-open/1.0.0`. Only nodes whose connected `wqc-core` reports `pcs_memory_policy=spill` via `GET /sysinfo` bid on `/wqc/tensor-pcs-bid/1.0.0`. If nominated (`request_kind=open_call`), the node fetches the leaf proof from CAS, verifies SHA-256, calls core `POST /leaf_pcs`, and streams the bundle. Open-call builders need not retain the proof locally.
+- **Leaf PCS**: When nominated via `/wqc/tensor-pcs-req/1.0.0`, call core `POST /leaf_pcs` and stream `/wqc/tensor-pcs/1.0.0`. Memory-gate **refuse** (422) is permanent; successful builds are cached in the PCS outbox for delivery retry.
+- **PCS open call**: After majority nomination is exhausted, bid on `/wqc/tensor-pcs-bid/1.0.0` only if the connected core reports `pcs_memory_policy=spill` via `GET /sysinfo` (set `WQC_PCS_MEMORY_POLICY=spill` on **wqc-core**, not on the node). Nominated builders fetch the leaf proof from CAS, verify SHA-256, then prove and stream the bundle.
 - **Crash recovery**: Persist pending tasks in SQLite and resume after restart.
 - **Admin surface**: Expose `GET /status` and `GET /health` for local monitoring.
 
@@ -45,47 +55,32 @@ wqc-core (HTTP or unix socket)
 
 The node runs **one sub-task at a time** per process. The orchestrator tracks in-flight work per node and will not dispatch the next slice for the same parent task until the previous result is ingested.
 
-## P2P Protocols (with Orchestrator)
+## P2P (with orchestrator)
 
-| Protocol ID | Direction | Purpose |
-| :--- | :--- | :--- |
-| `wqc-global-announcements` (gossip) | Orchestrator → Nodes | `TaskAnnouncement` after client submit |
-| `/wqc/task-announce/1.0.0` | Orchestrator → Node | Alternate announce stream (same payload) |
-| `/wqc/tensor-net/1.0.0` | Node → Orchestrator | Signed lottery `Bid` |
-| `/wqc/tensor-dispatch/1.0.0` | Orchestrator → Node | `SubTask` for execution |
-| `/wqc/tensor-result/1.0.0` | Node → Orchestrator | `result_type` + `complex_result` + optional `sample_result` + `proof` + `work_report` |
-| `/wqc/tensor-pcs-req/1.0.0` | Orchestrator → Node | Signed PCS build request (majority nominee or open-call builder) |
-| `/wqc/tensor-pcs/1.0.0` | Node → Orchestrator | `sub_task_id` + `leaf_pcs_b64`, or `refused: true` (nominated node only) |
-| `/wqc/tensor-pcs-open/1.0.0` | Orchestrator → Node | Signed CAS-backed PCS open-call announcement |
-| `/wqc/tensor-pcs-bid/1.0.0` | Node → Orchestrator | Spill-policy bid (`pcs_memory_policy=spill`) |
+| Stage | Protocol |
+| :--- | :--- |
+| Announce | Gossip `wqc-global-announcements` or stream `/wqc/task-announce/1.0.0` |
+| Bid | `/wqc/tensor-net/1.0.0` |
+| Dispatch | `/wqc/tensor-dispatch/1.0.0` |
+| Result | `/wqc/tensor-result/1.0.0` |
 
-### PCS open-call eligibility
-
-Open-call bids are gated by the **connected core**, not node-local env:
-
-1. On each open-call announcement, the node probes `wqc-core` `GET /sysinfo`.
-2. Bid only when `pcs_memory_policy == "spill"`.
-3. Set `WQC_PCS_MEMORY_POLICY=spill` on **wqc-core** (not on wqc-node).
-
-Remote-core deployments (`WQC_CORE_URL` pointing at another host) therefore bid according to that core's policy, avoiding env drift where a node bids but its core refuses `/leaf_pcs`.
-
-Wire formats — framing, signature payload layouts, and message shapes — are normative in
-[`p2p-protocols.md`](https://github.com/world-qc/wqc-docs/blob/main/spec/p2p-protocols.md).
-
-### `sample_counts` (P2P)
-
-Signed `SubTask` may include `output_mode`, `shots`, `classical_bit_count`, and orchestrator-generated `sample_seed`. The node forwards these to `wqc-core` and returns `result_type` + `sample_result` on `/wqc/tensor-result/1.0.0`.
-`counts` bitstrings follow **Qiskit order** (rightmost = `cbit 0`).
+Leaf PCS streams (`/wqc/tensor-pcs-req/1.0.0`, `/wqc/tensor-pcs/1.0.0`, open-call announce/bid) are documented in the same spec. Framing, signature payloads, and message shapes are normative in [wqc-docs `spec/p2p-protocols.md`](https://github.com/world-qc/wqc-docs/blob/main/spec/p2p-protocols.md).
 
 ## Quick Start
 
-### Prerequisites
+### Testnet (recommended)
+
+Use **[`wqc-miner`](https://github.com/world-qc/wqc-miner)** — paste your operator node key from [testnet.world-qc.io](https://testnet.world-qc.io), save settings, and start mining. The launcher sets `WQC_NODE_PRIVATE_KEY`, `WQC_TESTNET_NODE_KEY`, `WQC_BOOTSTRAP_URLS`, `WQC_CORE_URL`, and `WQC_MAX_MEMORY_GB` for you.
+
+### Manual run (development)
+
+#### Prerequisites
 
 - **Rust** 1.95+ (to build from source)
 - **`wqc-core`** running and reachable (`WQC_CORE_URL`)
 - **Orchestrator** libp2p bootstrap (discovered via HTTP at node startup)
 
-### Generate a node key
+#### Generate a node key
 
 The node identity is a 32-byte Ed25519 seed (Base64). The libp2p PeerID is derived from this key at startup.
 
@@ -94,9 +89,9 @@ The node identity is a 32-byte Ed25519 seed (Base64). The libp2p PeerID is deriv
 openssl rand -base64 32
 ```
 
-Set `WQC_NODE_PRIVATE_KEY` to that value. Log the derived PeerID from startup output when registering the node with the orchestrator dev faucet (if enabled).
+Set `WQC_NODE_PRIVATE_KEY` to that value. On public testnet also set `WQC_TESTNET_NODE_KEY` from the dashboard.
 
-### Minimal local run
+#### Minimal local run
 
 ```bash
 export WQC_NODE_PRIVATE_KEY="<base64-32-byte-seed>"
@@ -108,9 +103,11 @@ export WQC_MAX_MEMORY_GB="1"
 cargo run --release
 ```
 
-### Docker (devnet)
+### Multi-node E2E (developers)
 
-See `world-qc-docker/devnet/compose.yml` for a five-node layout. Typical node env:
+For a five-node reference stack (orchestrator, Redis, object store, cores, nodes), see [wqc-docs `examples/E2E.md`](https://github.com/world-qc/wqc-docs/blob/main/examples/E2E.md) and [`examples/compose.yml`](https://github.com/world-qc/wqc-docs/blob/main/examples/compose.yml). Requires a monorepo checkout with sibling repos (`wqc-core`, `wqc-orchestrator`, etc.).
+
+Typical node env in that layout:
 
 ```yaml
 WQC_NODE_PRIVATE_KEY: <unique per node>
@@ -120,12 +117,6 @@ WQC_BOOTSTRAP_URLS: http://wqc-orchestrator-01:9000/api/v1/p2p/bootstrap
 WQC_DATABASE_URL: sqlite:wqc-node-01.db
 WQC_MAX_MEMORY_GB: "1"
 WQC_P2P_LISTEN_PORT: "4002"
-```
-
-Build and run:
-
-```bash
-docker compose -f world-qc-docker/devnet/compose.yml up wqc-node-01
 ```
 
 ## Environment Variables
@@ -172,26 +163,24 @@ Task ingress and results use **P2P only**—there is no `/submit` or webhook end
 5. **Capability gating**: Gates from `wqc-core` `GET /gates` map to `supported_features`; the node skips announcements it cannot execute.
 6. **Trapdoor audits**: The orchestrator may inject golden sub-tasks; failures can lead to a ban on the orchestrator side.
 
-## Development Roadmap
+## Upcoming
 
-### Phase 1 — P2P Worker (current)
+- libp2p DHT orchestrator discovery (replacing static bootstrap).
+- On-chain economic layer (orchestrator / L2).
 
-- [x] libp2p bid / dispatch / result streams
-- [x] SQLite pending-task recovery
-- [x] `WorkReport` for orchestrator Gas accounting
-- [x] `WQC_NODE_STAKE_WQC` → Planck stake on bids
-- [x] P2P result outbox (SQLite `pending_results`) + background retry
+## Documentation
 
-### Phase 2 — Operations & execution model
+- [`docs/OPERATIONS.md`](docs/OPERATIONS.md) — operator runbook (env vars, lifecycle, troubleshooting)
+- [wqc-docs `spec/p2p-protocols.md`](https://github.com/world-qc/wqc-docs/blob/main/spec/p2p-protocols.md) — wire formats and protocol IDs
+- [wqc-docs `spec/architecture-current.md`](https://github.com/world-qc/wqc-docs/blob/main/spec/architecture-current.md) — swarm topology and off-chain economy
+- [`wqc-miner`](https://github.com/world-qc/wqc-miner) — recommended testnet launcher
+- [`wqc-core`](https://github.com/world-qc/wqc-core) — compute engine this process calls
 
-- [x] Forward `output_mode`, `shots`, `classical_bit_count`, `sample_seed`; return `sample_result` on P2P
-- [x] Prometheus metrics (`GET /metrics` on the admin HTTP port)
-- [ ] Hardware tuning via `wqc-core` (CPU/GPU is a core concern)
+## Requirements
 
-### Phase 3 — Sovereign Network
-
-- [ ] libp2p DHT orchestrator discovery (replacing static bootstrap)
-- [ ] On-chain $WQC settlement from verified root proofs
+- **Rust**: 1.95+ (see `AGENTS.md`)
+- **`wqc-core`**: reachable at `WQC_CORE_URL` (started by [`wqc-miner`](https://github.com/world-qc/wqc-miner) on testnet, or manually for dev)
+- **RAM**: `WQC_MAX_MEMORY_GB` drives advertised qubit capability; [`wqc-miner`](https://github.com/world-qc/wqc-miner) sets this from `max_memory_gb` in [`settings.toml`](https://github.com/world-qc/wqc-miner/blob/main/settings.toml.example). Advanced: `export WQC_MPS_MAX_BOND_DIM=…` before launch affects core accuracy ceiling (see [`wqc-core` `doc/tn-engine.md`](https://github.com/world-qc/wqc-core/blob/main/doc/tn-engine.md))
 
 ## Contributing
 

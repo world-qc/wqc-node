@@ -1,8 +1,19 @@
 # wqc-node Operations
 
-This document is the operational reference for running a worker node in the WQC devnet / public-testnet style environment. It reflects the **libp2p P2P** architecture; the legacy HTTP `/submit` + webhook path is removed.
+Operational reference for running a WQC worker node on **public testnet** or in a local E2E stack. Reflects the **libp2p P2P** architecture; there is no HTTP task ingress on the node.
 
 Use this guide after reading `wqc-node/README.md`. The README is the entry point; this file is the runbook.
+
+## Recommended path: wqc-miner
+
+Most testnet participants should use **[`wqc-miner`](https://github.com/world-qc/wqc-miner)** instead of configuring this process by hand. The launcher:
+
+- auto-generates `WQC_NODE_PRIVATE_KEY`
+- stores the dashboard **Node Key** as `WQC_TESTNET_NODE_KEY`
+- sets bootstrap URLs, core URL, ports, and `WQC_MAX_MEMORY_GB` from `settings.toml`
+- exposes `wqc-node` `/status` in the admin UI when mining is active
+
+The sections below document the env vars the miner injects — useful for headless Linux, systemd, and debugging.
 
 ## Quick operator checklist
 
@@ -108,7 +119,7 @@ Examples:
 
 If your node never bids, an overly small effective memory budget is one of the first things to check.
 
-Signoff drill (devnet multi-node scrape): `wqc-docs/examples/e2e/signoff/06_memory_budget.sh`.
+Signoff drill (multi-node scrape): [`wqc-docs/examples/e2e/signoff/06_memory_budget.sh`](https://github.com/world-qc/wqc-docs/blob/main/examples/e2e/signoff/06_memory_budget.sh).
 
 ## Lifecycle
 
@@ -152,7 +163,7 @@ If those appear, the node is usually ready to receive announcements and submit b
 
 `completed` / `failed` `tasks` rows older than `WQC_TASK_RETENTION_SECS` (default 24h) are deleted by a background prune loop, unless a matching `pending_results` outbox row still exists. After prune, a re-dispatched `task_id` is treated as new (idempotency window = retention). Set `WQC_TASK_RETENTION_SECS=0` to disable.
 
-Devnet signoff drill: `wqc-docs/examples/e2e/signoff/03_node_restart.sh` (records `/status` `pending_tasks` / `outbox_pending` around `docker restart`).
+E2E signoff drill: [`wqc-docs/examples/e2e/signoff/03_node_restart.sh`](https://github.com/world-qc/wqc-docs/blob/main/examples/e2e/signoff/03_node_restart.sh) (records `/status` `pending_tasks` / `outbox_pending` around container restart).
 
 ## First checks after startup
 
@@ -170,21 +181,23 @@ Pay attention to:
 - `outbox_pending`
 - core sysinfo visibility
 
-## Docker compose (devnet)
+## Multi-node E2E (developers)
 
-Reference: `world-qc-docker/devnet/compose.yml`
+Reference five-node Docker layout: [wqc-docs `examples/E2E.md`](https://github.com/world-qc/wqc-docs/blob/main/examples/E2E.md) and [`examples/compose.yml`](https://github.com/world-qc/wqc-docs/blob/main/examples/compose.yml).
 
 - Five nodes (`wqc-node-01` … `05`), each with a unique `WQC_NODE_PRIVATE_KEY` and SQLite file.
-- Shared bootstrap URL `http://wqc-orchestrator-01:9000/api/v1/p2p/bootstrap`; orchestrator advertises P2P on `10.20.3.11:4001`.
+- Shared bootstrap URL `http://wqc-orchestrator-01:9000/api/v1/p2p/bootstrap`; orchestrator advertises dialable P2P multiaddrs.
 - `WQC_NODE_STAKE_WQC=0.05` on all nodes.
 - `WQC_MAX_MEMORY_GB=1` is a reasonable small-host dev/test setting.
 
-Rebuild after code changes:
+Requires a monorepo checkout with sibling repos; see the compose file header comment. Rebuild after code changes:
 
 ```bash
-docker compose -f world-qc-docker/devnet/compose.yml build wqc-node-01
-docker compose -f world-qc-docker/devnet/compose.yml up -d wqc-node-01
+docker compose -f examples/compose.yml build wqc-node-01
+docker compose -f examples/compose.yml up -d wqc-node-01
 ```
+
+(Run from the `wqc-docs` repo root with paths as documented in `E2E.md`.)
 
 ## Health checks
 
@@ -227,7 +240,7 @@ Values only refresh when the node wins/submits another bid, so watch `metrics_ag
 
 ### Local node exporter (optional)
 
-`GET /metrics` on the admin HTTP port (default `8080`) still exposes the full `wqc_node_*` catalog for local debugging. Devnet may scrape `wqc-node-*:8080` directly; public miners should not need to expose this port.
+`GET /metrics` on the admin HTTP port (default `8080`) exposes the full `wqc_node_*` catalog for local debugging. Public miners using **wqc-miner** need not expose this port.
 
 The node only declares stake in bids. Balance, rewards, and burns are handled by the orchestrator Redis ledger. See [architecture-current §4](https://github.com/world-qc/wqc-docs/blob/main/spec/architecture-current.md#4-off-chain-economy-live).
 
@@ -273,6 +286,7 @@ For public participants, this means:
 
 ## Related docs
 
-- [wqc-orchestrator README — P2P protocols](../../wqc-orchestrator/README.md#p2p-protocols-node-facing)
+- [wqc-orchestrator README — P2P protocols](https://github.com/world-qc/wqc-orchestrator/blob/main/README.md#p2p-protocols-node-facing)
+- [wqc-miner README](https://github.com/world-qc/wqc-miner/blob/main/README.md) — recommended testnet launcher
 - [architecture-current — off-chain economy](https://github.com/world-qc/wqc-docs/blob/main/spec/architecture-current.md#4-off-chain-economy-live)
-- [whitepaper_gap.md](../whitepaper_gap.md) — WP vs implementation gaps
+- [p2p-protocols.md](https://github.com/world-qc/wqc-docs/blob/main/spec/p2p-protocols.md) — wire formats

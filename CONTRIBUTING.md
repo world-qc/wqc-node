@@ -22,7 +22,7 @@ If you plan a larger change, please open an issue first so we can discuss the ap
 
 - [Rust](https://www.rust-lang.org/tools/install) **1.95** or newer
 - A running `wqc-core` instance (HTTP or Unix socket) for end-to-end execution tests
-- Orchestrator bootstrap URL or devnet compose stack for P2P integration testing
+- Orchestrator bootstrap URL, or the [wqc-docs E2E compose stack](https://github.com/world-qc/wqc-docs/blob/main/examples/E2E.md) for multi-node P2P integration testing
 
 ### Clone and build
 
@@ -37,7 +37,7 @@ cargo build
 ```bash
 export WQC_CORE_URL="http://127.0.0.1:3000"
 export WQC_NODE_PRIVATE_KEY="<base64-32-byte-seed>"
-export WQC_BOOTSTRAP_URLS="http://127.0.0.1:4001/bootstrap"
+export WQC_BOOTSTRAP_URLS="http://127.0.0.1:9000/api/v1/p2p/bootstrap"
 cargo run
 ```
 
