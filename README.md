@@ -14,8 +14,6 @@ Operational details (env vars, troubleshooting) live in [`docs/OPERATIONS.md`](d
 client → wqc-orchestrator → wqc-node (this repo) → wqc-core
 ```
 
-On public testnet, most operators run **[`wqc-miner`](https://github.com/world-qc/wqc-miner)**, which starts `wqc-node` and `wqc-core` together and injects env from `settings.toml`. Direct `cargo run` of this repo is for development, headless servers, and integration testing.
-
 Task lifecycle (announce → bid → dispatch → compute → result) is normative in [wqc-docs `spec/architecture-current.md` §3](https://github.com/world-qc/wqc-docs/blob/main/spec/architecture-current.md#3-task-lifecycle).
 
 ## Why Run a Node?
@@ -68,19 +66,13 @@ Leaf PCS streams (`/wqc/tensor-pcs-req/1.0.0`, `/wqc/tensor-pcs/1.0.0`, open-cal
 
 ## Quick Start
 
-### Testnet (recommended)
-
-Use **[`wqc-miner`](https://github.com/world-qc/wqc-miner)** — paste your operator node key from [testnet.world-qc.io](https://testnet.world-qc.io), save settings, and start mining. The launcher sets `WQC_NODE_PRIVATE_KEY`, `WQC_TESTNET_NODE_KEY`, `WQC_BOOTSTRAP_URLS`, `WQC_CORE_URL`, and `WQC_MAX_MEMORY_GB` for you.
-
-### Manual run (development)
-
-#### Prerequisites
+### Prerequisites
 
 - **Rust** 1.95+ (to build from source)
 - **`wqc-core`** running and reachable (`WQC_CORE_URL`)
 - **Orchestrator** libp2p bootstrap (discovered via HTTP at node startup)
 
-#### Generate a node key
+### Generate a node key
 
 The node identity is a 32-byte Ed25519 seed (Base64). The libp2p PeerID is derived from this key at startup.
 
@@ -91,7 +83,7 @@ openssl rand -base64 32
 
 Set `WQC_NODE_PRIVATE_KEY` to that value. On public testnet also set `WQC_TESTNET_NODE_KEY` from the dashboard.
 
-#### Minimal local run
+### Minimal local run
 
 ```bash
 export WQC_NODE_PRIVATE_KEY="<base64-32-byte-seed>"
@@ -173,14 +165,14 @@ Task ingress and results use **P2P only**—there is no `/submit` or webhook end
 - [`docs/OPERATIONS.md`](docs/OPERATIONS.md) — operator runbook (env vars, lifecycle, troubleshooting)
 - [wqc-docs `spec/p2p-protocols.md`](https://github.com/world-qc/wqc-docs/blob/main/spec/p2p-protocols.md) — wire formats and protocol IDs
 - [wqc-docs `spec/architecture-current.md`](https://github.com/world-qc/wqc-docs/blob/main/spec/architecture-current.md) — swarm topology and off-chain economy
-- [`wqc-miner`](https://github.com/world-qc/wqc-miner) — recommended testnet launcher
 - [`wqc-core`](https://github.com/world-qc/wqc-core) — compute engine this process calls
+- [`wqc-miner`](https://github.com/world-qc/wqc-miner) — operator launcher (bundles core + node)
 
 ## Requirements
 
 - **Rust**: 1.95+ (see `AGENTS.md`)
-- **`wqc-core`**: reachable at `WQC_CORE_URL` (started by [`wqc-miner`](https://github.com/world-qc/wqc-miner) on testnet, or manually for dev)
-- **RAM**: `WQC_MAX_MEMORY_GB` drives advertised qubit capability; [`wqc-miner`](https://github.com/world-qc/wqc-miner) sets this from `max_memory_gb` in [`settings.toml`](https://github.com/world-qc/wqc-miner/blob/main/settings.toml.example). Advanced: `export WQC_MPS_MAX_BOND_DIM=…` before launch affects core accuracy ceiling (see [`wqc-core` `doc/tn-engine.md`](https://github.com/world-qc/wqc-core/blob/main/doc/tn-engine.md))
+- **`wqc-core`**: reachable at `WQC_CORE_URL`
+- **RAM**: `WQC_MAX_MEMORY_GB` drives advertised qubit capability (see env table above). Advanced: `export WQC_MPS_MAX_BOND_DIM=…` before starting core affects accuracy ceiling (see [`wqc-core` `doc/tn-engine.md`](https://github.com/world-qc/wqc-core/blob/main/doc/tn-engine.md))
 
 ## Contributing
 

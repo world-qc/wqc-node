@@ -4,17 +4,6 @@ Operational reference for running a WQC worker node on **public testnet** or in 
 
 Use this guide after reading `wqc-node/README.md`. The README is the entry point; this file is the runbook.
 
-## Recommended path: wqc-miner
-
-Most testnet participants should use **[`wqc-miner`](https://github.com/world-qc/wqc-miner)** instead of configuring this process by hand. The launcher:
-
-- auto-generates `WQC_NODE_PRIVATE_KEY`
-- stores the dashboard **Node Key** as `WQC_TESTNET_NODE_KEY`
-- sets bootstrap URLs, core URL, ports, and `WQC_MAX_MEMORY_GB` from `settings.toml`
-- exposes `wqc-node` `/status` in the admin UI when mining is active
-
-The sections below document the env vars the miner injects — useful for headless Linux, systemd, and debugging.
-
 ## Quick operator checklist
 
 Before starting a node, confirm all of the following:
@@ -240,7 +229,7 @@ Values only refresh when the node wins/submits another bid, so watch `metrics_ag
 
 ### Local node exporter (optional)
 
-`GET /metrics` on the admin HTTP port (default `8080`) exposes the full `wqc_node_*` catalog for local debugging. Public miners using **wqc-miner** need not expose this port.
+`GET /metrics` on the admin HTTP port (default `8080`) exposes the full `wqc_node_*` catalog for local debugging. Do not expose this port on public hosts.
 
 The node only declares stake in bids. Balance, rewards, and burns are handled by the orchestrator Redis ledger. See [architecture-current §4](https://github.com/world-qc/wqc-docs/blob/main/spec/architecture-current.md#4-off-chain-economy-live).
 
@@ -287,6 +276,5 @@ For public participants, this means:
 ## Related docs
 
 - [wqc-orchestrator README — P2P protocols](https://github.com/world-qc/wqc-orchestrator/blob/main/README.md#p2p-protocols-node-facing)
-- [wqc-miner README](https://github.com/world-qc/wqc-miner/blob/main/README.md) — recommended testnet launcher
 - [architecture-current — off-chain economy](https://github.com/world-qc/wqc-docs/blob/main/spec/architecture-current.md#4-off-chain-economy-live)
 - [p2p-protocols.md](https://github.com/world-qc/wqc-docs/blob/main/spec/p2p-protocols.md) — wire formats
