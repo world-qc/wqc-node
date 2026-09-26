@@ -16,7 +16,7 @@ futures = "0.3"
 libp2p = { version = "0.56", features = ["tokio", "gossipsub", "macros", "tcp", "quic", "noise", "yamux", "identify", "ping"] }
 libp2p-stream = "0.4.0-alpha"
 num-bigint = { version = "0.4", features = ["serde"] }
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rusqlite = { version = "0.39", features = ["bundled"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
