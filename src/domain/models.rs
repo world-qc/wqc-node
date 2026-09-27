@@ -167,6 +167,10 @@ pub struct NodeStatus {
     pub outbox_pending: usize,
     pub max_qubits: usize,
     pub max_memory_gib: f64,
+    /// `ram` or `vram` — which envelope limited the dense bid budget.
+    pub memory_cap_source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vram_budget_gib: Option<f64>,
     pub system_memory_used_kb: u64,
     pub system_memory_total_kb: u64,
     pub cpu_usage_percent: f32,
@@ -189,6 +193,9 @@ pub struct CoreSystemInfo {
     /// Prove-time PCS RAM gate on the connected wqc-core (`WQC_PCS_MEMORY_POLICY`).
     #[serde(default = "default_pcs_memory_policy")]
     pub pcs_memory_policy: String,
+    /// Adapter `max_buffer_size` when core WebGPU is active.
+    #[serde(default)]
+    pub vram_budget_bytes: Option<u64>,
 }
 
 fn default_pcs_memory_policy() -> String {
