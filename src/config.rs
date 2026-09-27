@@ -1,6 +1,10 @@
 use std::env;
 
-use crate::memory_budget::resolve_max_qubits_from_memory_gb;
+use crate::domain::models::CoreSystemInfo;
+use crate::memory_budget::{
+    effective_memory_bytes, resolve_max_qubits_from_memory_gb,
+    resolve_max_qubits_with_optional_vram, MemoryCapSource,
+};
 use anyhow::Context;
 use sysinfo::{MemoryRefreshKind, RefreshKind, System};
 
@@ -17,10 +21,18 @@ pub struct NodeConfig {
     /// libp2p PeerID string (used as node_id in P2P payloads).
     pub peer_id: String,
     pub core_url: String,
-    /// Derived from `WQC_MAX_MEMORY_GB` (dense `2^n × 16` envelope); advertised in bids.
+    /// Derived from memory budget (dense `2^n × 16` envelope); advertised in bids.
     pub max_qubits: usize,
-    /// Effective WQC memory budget (GiB) after host reserve cap.
+    /// Effective WQC memory budget (GiB) after host / optional VRAM caps.
     pub max_memory_gib: f64,
+    /// Operator request from `WQC_MAX_MEMORY_GB` (`None` = unset → host−reserve).
+    pub requested_memory_gib: Option<f64>,
+    /// Host physical RAM at config load (bytes).
+    pub host_total_memory_bytes: u64,
+    /// Which envelope limited `max_memory_gib` (`ram` or `vram`).
+    pub memory_cap_source: MemoryCapSource,
+    /// Adapter VRAM budget from core `/sysinfo` when WebGPU (GiB), if known.
+    pub vram_budget_gib: Option<f64>,
     pub compute_timeout_secs: u64,
     /// Wall-clock budget for deferred `POST /leaf_pcs` (default 7200s).
     pub pcs_timeout_secs: u64,
@@ -49,17 +61,14 @@ impl NodeConfig {
     pub fn from_env() -> anyhow::Result<Self> {
         let core_url =
             env::var("WQC_CORE_URL").unwrap_or_else(|_| "http://localhost:3000".to_string());
-        let requested_memory_gib = env::var("WQC_MAX_MEMORY_GB")
-            .unwrap_or_else(|_| "16".to_string())
-            .parse::<f64>()
-            .context("WQC_MAX_MEMORY_GB must be a valid number")?;
+        let requested_memory_gib = parse_requested_memory_gib()?;
         let mut sys = System::new_with_specifics(
             RefreshKind::new().with_memory(MemoryRefreshKind::everything()),
         );
         sys.refresh_memory();
-        let total_physical_bytes = sys.total_memory();
+        let host_total_memory_bytes = sys.total_memory();
         let (max_qubits, max_memory_gib) =
-            resolve_max_qubits_from_memory_gb(requested_memory_gib, total_physical_bytes);
+            resolve_max_qubits_from_memory_gb(requested_memory_gib, host_total_memory_bytes);
         let compute_timeout_secs = env::var("WQC_COMPUTE_TIMEOUT_SECS")
             .unwrap_or_else(|_| "300".to_string())
             .parse()
@@ -111,11 +120,15 @@ impl NodeConfig {
                 format!("WQC_NODE_STAKE_WQC must be a valid WQC amount, got {stake_wqc:?}")
             })?;
 
+        let requested_log = requested_memory_gib
+            .map(|g| format!("{g:.2} GiB"))
+            .unwrap_or_else(|| "unset (host−reserve)".into());
         tracing::info!(
-            "Node Config Loaded: WQC memory budget = {:.2} GiB (requested {:.2} GiB, host total {} KiB) → max_qubits = {}, compute timeout = {}s",
+            "Node Config Loaded: WQC memory budget = {:.2} GiB (requested {}, host total {} KiB, cap={}) → max_qubits = {}, compute timeout = {}s",
             max_memory_gib,
-            requested_memory_gib,
-            total_physical_bytes / 1024,
+            requested_log,
+            host_total_memory_bytes / 1024,
+            MemoryCapSource::Ram.as_str(),
             max_qubits,
             compute_timeout_secs,
         );
@@ -145,6 +158,10 @@ impl NodeConfig {
             core_url,
             max_qubits,
             max_memory_gib,
+            requested_memory_gib,
+            host_total_memory_bytes,
+            memory_cap_source: MemoryCapSource::Ram,
+            vram_budget_gib: None,
             compute_timeout_secs,
             pcs_timeout_secs,
             signing_key,
@@ -163,6 +180,41 @@ impl NodeConfig {
         })
     }
 
+    /// After core `/sysinfo`: if WebGPU is active, take `min(RAM, VRAM−reserve)` for bids.
+    pub fn apply_core_sysinfo(&mut self, info: &CoreSystemInfo) {
+        let ram_bytes =
+            effective_memory_bytes(self.requested_memory_gib, self.host_total_memory_bytes);
+
+        let vram_raw = if info.tn_backend_active.eq_ignore_ascii_case("webgpu") {
+            info.vram_budget_bytes.filter(|&b| b > 0)
+        } else {
+            None
+        };
+
+        self.vram_budget_gib = vram_raw.map(|b| b as f64 / (1024.0 * 1024.0 * 1024.0));
+
+        let (max_qubits, max_memory_gib, source) =
+            resolve_max_qubits_with_optional_vram(ram_bytes, vram_raw);
+
+        if source != self.memory_cap_source
+            || (max_memory_gib - self.max_memory_gib).abs() > 0.01
+            || max_qubits != self.max_qubits
+        {
+            tracing::info!(
+                "Memory budget after core sysinfo: {:.2} GiB → max_qubits = {} (cap={}, tn_backend={}, vram_budget_gib={:?})",
+                max_memory_gib,
+                max_qubits,
+                source.as_str(),
+                info.tn_backend_active,
+                self.vram_budget_gib,
+            );
+        }
+
+        self.max_qubits = max_qubits;
+        self.max_memory_gib = max_memory_gib;
+        self.memory_cap_source = source;
+    }
+
     pub fn apply_orchestrator_bootstrap(
         &mut self,
         bootstrap: OrchestratorBootstrap,
@@ -176,6 +228,19 @@ impl NodeConfig {
         self.bootstrap_peers = bootstrap.multiaddrs;
         tracing::info!("Orchestrator libp2p PeerID: {}", bootstrap.peer_id);
         Ok(())
+    }
+}
+
+/// `None` = env unset/empty → host−reserve. `Some` = explicit GiB request.
+fn parse_requested_memory_gib() -> anyhow::Result<Option<f64>> {
+    match env::var("WQC_MAX_MEMORY_GB") {
+        Err(_) => Ok(None),
+        Ok(s) if s.trim().is_empty() => Ok(None),
+        Ok(s) => s
+            .trim()
+            .parse::<f64>()
+            .map(Some)
+            .context("WQC_MAX_MEMORY_GB must be a valid number"),
     }
 }
 

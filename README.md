@@ -120,7 +120,7 @@ WQC_P2P_LISTEN_PORT: "4002"
 | `WQC_CORE_URL` | no | `http://localhost:3000` | `wqc-core` base URL or `unix:/path/to.sock`. |
 | `WQC_NODE_STAKE_WQC` | no | `0.05` | Human WQC amount sent as `stake_amount` (Planck integer on wire). |
 | `WQC_TESTNET_NODE_KEY` | testnet | — | Node Key from [testnet.world-qc.io](https://testnet.world-qc.io). Derives `operator_id` and signs `operator_sig` on bids. Required on public testnet. |
-| `WQC_MAX_MEMORY_GB` | no | `16` | WQC memory budget (GiB). Capped at host RAM minus 1/2 GiB reserve (`memory_budget.rs`). Derives `max_qubit_capability` as `floor(log2(budget / 16))` (dense `2^n × 16` envelope). |
+| `WQC_MAX_MEMORY_GB` | no | unset = host−reserve | WQC RAM budget (GiB). Unset/empty → host total minus 1/2 GiB reserve (`memory_budget.rs`). Explicit value is capped the same way. When core reports WebGPU + `vram_budget_bytes`, bid envelope is `min(RAM, VRAM−1 GiB)`. Derives `max_qubit_capability` as `floor(log2(budget / 16))` (dense `2^n × 16`). |
 | `WQC_COMPUTE_TIMEOUT_SECS` | no | `300` | Timeout for `POST /compute` to core. |
 | `WQC_CORE_HEALTH_FAIL_THRESHOLD` | no | `3` | Consecutive unreachable core errors before opening the health-gate. |
 | `WQC_CORE_HEALTH_BACKOFF_SECS` | no | `30` | Seconds to skip core `/compute` and `/leaf_pcs` prove calls while the gate is open. |
@@ -139,7 +139,7 @@ WQC_P2P_LISTEN_PORT: "4002"
 | Endpoint | Description |
 | :--- | :--- |
 | `GET /health` | `{"status":"UP"}` |
-| `GET /status` | Pending compute tasks, **outbox** pending results, `max_qubits`, `max_memory_gib`, core sysinfo, supported gates |
+| `GET /status` | Pending compute tasks, **outbox** pending results, `max_qubits`, `max_memory_gib`, `memory_cap_source` (`ram`/`vram`), optional `vram_budget_gib`, core sysinfo, supported gates |
 | `GET /metrics` | Prometheus exposition format |
 
 `GET /status` reads `system_memory_used_kb`, `system_memory_total_kb`, and `cpu_usage_percent` from the connected `wqc-core` `GET /sysinfo`. **If core is unreachable the node still answers `200` with those three fields zeroed** instead of failing, so a monitor cannot tell a dead core from a genuine reading. The fetch failure is only written to the node log; no metric covers it (`wqc_node_core_requests_total` counts `POST /compute` outcomes, not this call). Poll core's own `/health` if you need to distinguish the two.
@@ -172,7 +172,7 @@ Task ingress and results use **P2P only**—there is no `/submit` or webhook end
 
 - **Rust**: 1.95+ (see `AGENTS.md`)
 - **`wqc-core`**: reachable at `WQC_CORE_URL`
-- **RAM**: `WQC_MAX_MEMORY_GB` drives advertised qubit capability (see env table above). Advanced: `export WQC_MPS_MAX_BOND_DIM=…` before starting core affects accuracy ceiling (see [`wqc-core` `doc/tn-engine.md`](https://github.com/world-qc/wqc-core/blob/main/doc/tn-engine.md))
+- **RAM / VRAM**: `WQC_MAX_MEMORY_GB` sizes the RAM side of advertised qubit capability (unset = host−reserve). With WebGPU, bids also take `min` with core adapter VRAM (see env table). Advanced: `export WQC_MPS_MAX_BOND_DIM=…` before starting core affects accuracy ceiling (see [`wqc-core` `doc/tn-engine.md`](https://github.com/world-qc/wqc-core/blob/main/doc/tn-engine.md))
 
 ## Contributing
 

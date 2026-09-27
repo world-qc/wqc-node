@@ -83,7 +83,7 @@ cargo run --release
 | :--- | :--- | :--- |
 | `WQC_NODE_STAKE_WQC` | `0.05` | Parsed to Planck (pWQC) for bid `stake_amount`. Up to 18 fractional digits. |
 | `WQC_TESTNET_NODE_KEY` | — | **Public testnet:** Node Key from the dashboard (`nk_…`). Derives operator identity and `operator_sig` on bids. Without it, bids are rejected. |
-| `WQC_MAX_MEMORY_GB` | `16` | WQC memory budget (GiB), capped at **host total − reserve** (1 GiB if host < 16 GiB, else 2 GiB; see `memory_budget.rs`). Derives max qubits (`2^n × 16` bytes). Nodes with `< 10` max qubits never bid (`NETWORK_MIN_QUBITS`). |
+| `WQC_MAX_MEMORY_GB` | unset = host−reserve | WQC RAM budget (GiB). Unset/empty → **host total − reserve** (1 GiB if host < 16 GiB, else 2 GiB; see `memory_budget.rs`). Explicit values are capped the same way. With WebGPU, effective bid budget = `min(RAM, VRAM−1 GiB)`. Derives max qubits (`2^n × 16` bytes). Nodes with `< 10` max qubits never bid (`NETWORK_MIN_QUBITS`). |
 | `WQC_COMPUTE_TIMEOUT_SECS` | `300` | Per-request timeout to core. |
 | `WQC_DATABASE_URL` | `sqlite:wqc-node.db` | Relative path is under the process working directory. |
 | `WQC_P2P_LISTEN_PORT` | `4002` | Bind `0.0.0.0` on TCP and QUIC. |
@@ -95,9 +95,12 @@ cargo run --release
 
 ### Memory budget notes
 
-`WQC_MAX_MEMORY_GB` is the main participant-facing sizing knob.
+`WQC_MAX_MEMORY_GB` is the main participant-facing sizing knob for **system RAM**.
 
-- The node caps the requested budget at **host physical RAM minus a reserve** (1 GiB on hosts under 16 GiB total, otherwise 2 GiB) — not a flat 80% rule
+- Unset or empty → no operator request cap; effective RAM budget = **host physical RAM minus reserve** (1 GiB on hosts under 16 GiB total, otherwise 2 GiB)
+- An explicit value is still capped at that host−reserve ceiling — not a flat 80% rule
+- After connecting to core: if `tn_backend_active=webgpu` and `/sysinfo` reports `vram_budget_bytes`, bid envelope becomes `min(RAM_budget, VRAM_budget − 1 GiB)`; PCS remains RAM-only on core
+- Startup logs and `GET /status` expose `memory_cap_source` (`ram` or `vram`)
 - It then derives `max_qubits` from the dense envelope `2^n × 16` bytes
 - That derived value is what the node advertises to the orchestrator
 
@@ -166,6 +169,8 @@ Pay attention to:
 
 - `max_qubits`
 - `max_memory_gib`
+- `memory_cap_source` (`ram` or `vram`)
+- optional `vram_budget_gib`
 - `pending_tasks`
 - `outbox_pending`
 - core sysinfo visibility

@@ -44,6 +44,9 @@ async fn main() -> anyhow::Result<()> {
     ));
     let supported_gates = handlers::sync_core_capabilities(core_client.clone()).await;
     let core_sysinfo = core_client.get_system_info().await.ok();
+    if let Some(ref info) = core_sysinfo {
+        config.apply_core_sysinfo(info);
+    }
 
     let storage = infra::storage::Storage::new(&config.database_url)?;
     let http_client = geo::build_geo_http_client();
@@ -164,6 +167,13 @@ fn print_startup_banner(
         "●".magenta(),
         "Capacity:".bold(),
         config.max_qubits
+    );
+    println!(
+        "  {}  {:15} {:.2} GiB (cap={})",
+        "●".cyan(),
+        "WQC budget:".bold(),
+        config.max_memory_gib,
+        config.memory_cap_source.as_str()
     );
     println!(
         "  {}  {:15} {} task(s) recovered from SQLite",
