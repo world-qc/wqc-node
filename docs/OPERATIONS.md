@@ -241,13 +241,14 @@ The node only declares stake in bids. Balance, rewards, and burns are handled by
 For public participants, this means:
 
 - you do **not** need an on-chain wallet flow to run a node today
-- stake is an advertised bid parameter, not a self-custodied on-chain lock
+- the bid advertises `stake_amount`; the orchestrator reserves that amount from the operator stake account at dispatch. Public testnet stake is an off-chain Redis balance, not an on-chain lock
 - settlement and faucet behavior are currently testnet services operated on the orchestrator side
 
 | Concern | Where |
 | :--- | :--- |
 | Bid `stake_amount` | `WQC_NODE_STAKE_WQC` on node |
 | Dev faucet / auto stake cap | `WQC_MAX_DEV_STAKE_WQC` on orchestrator |
+| Dev auto-stake | `WQC_DEV_STAKE_AUTO` (default `0`; devnet compose `1`). Writes `staked` once. Does not fund the wallet |
 | Gas from execution | `work_report` in P2P result → orchestrator `Gas_quantum` |
 
 ## Troubleshooting
