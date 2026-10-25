@@ -13,7 +13,7 @@ use crate::domain::bid;
 use crate::domain::features;
 use crate::domain::p2p::TaskAnnouncement;
 use crate::infra::geoip;
-use crate::transport::p2p::stream_io::write_outbound_stream;
+use crate::transport::p2p::stream_io::write_outbound_stream_expect_ack;
 
 pub struct BidClient {
     control: Arc<Mutex<Control>>,
@@ -63,7 +63,9 @@ impl BidClient {
         const MAX_ATTEMPTS: u32 = 3;
         let mut last_err = None;
         for attempt in 0..MAX_ATTEMPTS {
-            match write_outbound_stream(
+            // The proxy reads one bid stream at a time and does not confirm a
+            // bare write. Wait for its ack, and retry while the bid window is open.
+            match write_outbound_stream_expect_ack(
                 &self.control,
                 orchestrator_peer_id,
                 bid::PROTOCOL_BID,
