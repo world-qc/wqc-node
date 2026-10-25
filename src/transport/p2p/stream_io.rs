@@ -34,11 +34,13 @@ pub async fn write_outbound_stream_expect_ack(
     payload: &[u8],
 ) -> anyhow::Result<()> {
     let stream_protocol = StreamProtocol::new(protocol);
-    let mut control = control.lock().await;
-    let mut stream = control
-        .open_stream(peer_id, stream_protocol)
-        .await
-        .map_err(|e| anyhow::anyhow!("failed to open stream to {peer_id} on {protocol}: {e}"))?;
+    let mut stream = {
+        let mut control = control.lock().await;
+        control
+            .open_stream(peer_id, stream_protocol)
+            .await
+            .map_err(|e| anyhow::anyhow!("failed to open stream to {peer_id} on {protocol}: {e}"))?
+    };
 
     stream.write_all(payload).await?;
     AsyncWriteExt::close(&mut stream).await?;
