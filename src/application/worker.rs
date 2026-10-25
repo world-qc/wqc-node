@@ -61,7 +61,7 @@ async fn process_task(state: Arc<AppState>, result_sink: Arc<dyn ResultSink>, ta
                 sample_result: None,
                 expectation_result: None,
                 proof: None,
-                error: Some(e.to_string()),
+                error: Some(failure_reason(&e)),
                 execution_time_ms: None,
                 work_report: None,
             }
@@ -95,6 +95,11 @@ async fn process_task(state: Arc<AppState>, result_sink: Arc<dyn ResultSink>, ta
     tracing::info!("Worker: Finished task {}", task_id);
 }
 
+/// Orchestrator-facing failure text. Includes the cause chain, not only the outer context.
+fn failure_reason(err: &anyhow::Error) -> String {
+    format!("{err:#}")
+}
+
 async fn execute_compute(
     core_client: &WqcCoreClient,
     request: &ComputeRequest,
@@ -116,4 +121,18 @@ async fn execute_compute(
         execution_time_ms,
         work_report: res.work_report,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::failure_reason;
+
+    #[test]
+    fn failure_reason_includes_the_cause() {
+        let err =
+            anyhow::anyhow!("connection refused").context("Failed to send request to wqc-core");
+        let msg = failure_reason(&err);
+        assert!(msg.contains("Failed to send request to wqc-core"), "{msg}");
+        assert!(msg.contains("connection refused"), "{msg}");
+    }
 }
