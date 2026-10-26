@@ -23,6 +23,8 @@ pub struct NodeConfig {
     pub core_url: String,
     /// Derived from memory budget (dense `2^n × 16` envelope); advertised in bids.
     pub max_qubits: usize,
+    /// Compact width whose χ=128 MPS workspace fits the same budget. Scalar bids.
+    pub max_mps_qubits: usize,
     /// Effective WQC memory budget (GiB) after host / optional VRAM caps.
     pub max_memory_gib: f64,
     /// Operator request from `WQC_MAX_MEMORY_GB` (`None` = unset → host−reserve).
@@ -67,7 +69,7 @@ impl NodeConfig {
         );
         sys.refresh_memory();
         let host_total_memory_bytes = sys.total_memory();
-        let (max_qubits, max_memory_gib) =
+        let (max_qubits, max_mps_qubits, max_memory_gib) =
             resolve_max_qubits_from_memory_gb(requested_memory_gib, host_total_memory_bytes);
         let compute_timeout_secs = env::var("WQC_COMPUTE_TIMEOUT_SECS")
             .unwrap_or_else(|_| "300".to_string())
@@ -124,12 +126,13 @@ impl NodeConfig {
             .map(|g| format!("{g:.2} GiB"))
             .unwrap_or_else(|| "unset (host−reserve)".into());
         tracing::info!(
-            "Node Config Loaded: WQC memory budget = {:.2} GiB (requested {}, host total {} KiB, cap={}) → max_qubits = {}, compute timeout = {}s",
+            "Node Config Loaded: WQC memory budget = {:.2} GiB (requested {}, host total {} KiB, cap={}) → max_qubits = {}, max_mps_qubits = {}, compute timeout = {}s",
             max_memory_gib,
             requested_log,
             host_total_memory_bytes / 1024,
             MemoryCapSource::Ram.as_str(),
             max_qubits,
+            max_mps_qubits,
             compute_timeout_secs,
         );
         tracing::info!("Node libp2p PeerID: {}", peer_id);
@@ -157,6 +160,7 @@ impl NodeConfig {
             peer_id,
             core_url,
             max_qubits,
+            max_mps_qubits,
             max_memory_gib,
             requested_memory_gib,
             host_total_memory_bytes,
@@ -193,17 +197,19 @@ impl NodeConfig {
 
         self.vram_budget_gib = vram_raw.map(|b| b as f64 / (1024.0 * 1024.0 * 1024.0));
 
-        let (max_qubits, max_memory_gib, source) =
+        let (max_qubits, max_mps_qubits, max_memory_gib, source) =
             resolve_max_qubits_with_optional_vram(ram_bytes, vram_raw);
 
         if source != self.memory_cap_source
             || (max_memory_gib - self.max_memory_gib).abs() > 0.01
             || max_qubits != self.max_qubits
+            || max_mps_qubits != self.max_mps_qubits
         {
             tracing::info!(
-                "Memory budget after core sysinfo: {:.2} GiB → max_qubits = {} (cap={}, tn_backend={}, vram_budget_gib={:?})",
+                "Memory budget after core sysinfo: {:.2} GiB → max_qubits = {}, max_mps_qubits = {} (cap={}, tn_backend={}, vram_budget_gib={:?})",
                 max_memory_gib,
                 max_qubits,
+                max_mps_qubits,
                 source.as_str(),
                 info.tn_backend_active,
                 self.vram_budget_gib,
@@ -211,6 +217,7 @@ impl NodeConfig {
         }
 
         self.max_qubits = max_qubits;
+        self.max_mps_qubits = max_mps_qubits;
         self.max_memory_gib = max_memory_gib;
         self.memory_cap_source = source;
     }

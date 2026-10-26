@@ -166,6 +166,8 @@ pub struct NodeStatus {
     pub pending_tasks: usize,
     pub outbox_pending: usize,
     pub max_qubits: usize,
+    /// χ=128 MPS compact width from the same memory budget as `max_qubits`.
+    pub max_mps_qubits: usize,
     pub max_memory_gib: f64,
     /// `ram` or `vram` — which envelope limited the dense bid budget.
     pub memory_cap_source: String,
