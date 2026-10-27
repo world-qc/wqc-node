@@ -156,6 +156,7 @@ mod tests {
                 required_votes: Some(2),
                 mps_max_bond_dim: None,
                 mps_site_order: None,
+                mps_time_split: None,
                 output_mode: String::new(),
                 classical_bit_count: None,
                 shots: None,

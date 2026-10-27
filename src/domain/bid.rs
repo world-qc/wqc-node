@@ -92,10 +92,7 @@ pub fn build_signed_bid(
         max_qubit_capability: config.max_qubits as u32,
         // The JSON field is u32. max_qubits_from_mps_memory_budget already
         // stops at this cap; a larger configured width uses the same ceiling.
-        max_mps_qubits: match u32::try_from(config.max_mps_qubits) {
-            Ok(width) => width,
-            Err(_) => u32::MAX,
-        },
+        max_mps_qubits: u32::try_from(config.max_mps_qubits).unwrap_or(u32::MAX),
         current_load_factors: current_load,
         timestamp,
         lottery_attempt,
