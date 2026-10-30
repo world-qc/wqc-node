@@ -54,12 +54,26 @@ impl std::fmt::Display for AcceptTaskError {
 
 impl std::error::Error for AcceptTaskError {}
 
+/// Scalar slices use the χ=128 MPS width. Other modes stay on the dense envelope.
+/// A zero MPS width falls back to the dense cap so an old config still accepts work.
+pub fn compact_qubit_limit(output_mode: &str, max_qubits: usize, max_mps_qubits: usize) -> usize {
+    match output_mode {
+        "" | "statevector_scalar" if max_mps_qubits > 0 => max_mps_qubits,
+        _ => max_qubits,
+    }
+}
+
 pub async fn accept_compute_task(
     state: &Arc<AppState>,
     mut request: ComputeRequest,
     orchestrator_pubkey: &str,
 ) -> Result<(), AcceptTaskError> {
-    if request.qubit_count > state.config.max_qubits {
+    let limit = compact_qubit_limit(
+        &request.output_mode,
+        state.config.max_qubits,
+        state.config.max_mps_qubits,
+    );
+    if request.qubit_count > limit {
         return Err(AcceptTaskError::Validation(
             "Requested qubit_count exceeds node limit".to_string(),
         ));
@@ -142,6 +156,7 @@ mod tests {
                 required_votes: Some(2),
                 mps_max_bond_dim: None,
                 mps_site_order: None,
+                mps_time_split: None,
                 output_mode: String::new(),
                 classical_bit_count: None,
                 shots: None,
@@ -152,6 +167,15 @@ mod tests {
             },
             orchestrator_pubkey: "orch-pubkey".to_string(),
         }
+    }
+
+    #[test]
+    fn scalar_limit_uses_mps_width_and_other_modes_stay_dense() {
+        assert_eq!(compact_qubit_limit("statevector_scalar", 26, 2048), 2048);
+        assert_eq!(compact_qubit_limit("", 26, 2048), 2048);
+        assert_eq!(compact_qubit_limit("expectation", 26, 2048), 26);
+        assert_eq!(compact_qubit_limit("sample_counts", 26, 2048), 26);
+        assert_eq!(compact_qubit_limit("statevector_scalar", 26, 0), 26);
     }
 
     #[test]

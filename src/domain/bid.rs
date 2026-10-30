@@ -20,6 +20,11 @@ pub struct Bid {
     pub task_id: String,
     pub node_id: String,
     pub max_qubit_capability: u32,
+    /// χ=128 MPS compact width for scalar slices. Omitted when 0.
+    /// Not part of the signed payload: the bid layout has no length prefix, so
+    /// appending a field would reject bids from nodes that do not send it.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub max_mps_qubits: u32,
     pub current_load_factors: u32,
     pub timestamp: i64,
     pub lottery_attempt: u64,
@@ -48,7 +53,7 @@ pub struct Bid {
 ///
 /// `supported_features` is derived from wqc-core `GET /gates` at node startup.
 /// Parent tasks may advertise more qubits than a single node can execute; the orchestrator
-/// slices branches down to each node's `max_qubit_capability` before dispatch.
+/// slices scalar branches down to `max_mps_qubits` and other modes down to `max_qubit_capability`.
 pub fn should_bid_on(
     announcement: &TaskAnnouncement,
     config: &NodeConfig,
@@ -85,6 +90,9 @@ pub fn build_signed_bid(
         task_id: announcement.task_id.clone(),
         node_id: config.peer_id.clone(),
         max_qubit_capability: config.max_qubits as u32,
+        // The JSON field is u32. max_qubits_from_mps_memory_budget already
+        // stops at this cap; a larger configured width uses the same ceiling.
+        max_mps_qubits: u32::try_from(config.max_mps_qubits).unwrap_or(u32::MAX),
         current_load_factors: current_load,
         timestamp,
         lottery_attempt,
@@ -122,6 +130,7 @@ pub fn serialize_bid_payload(bid: &Bid) -> Vec<u8> {
     let mut payload = Vec::new();
     payload.extend_from_slice(bid.task_id.as_bytes());
     payload.extend_from_slice(bid.node_id.as_bytes());
+    // max_mps_qubits stays out of this buffer. See the field comment on Bid.
     payload.extend_from_slice(&bid.max_qubit_capability.to_be_bytes());
     payload.extend_from_slice(&bid.current_load_factors.to_be_bytes());
     payload.extend_from_slice(&bid.timestamp.to_be_bytes());
@@ -179,6 +188,10 @@ fn meets_difficulty(hash: &[u8], difficulty: u32) -> bool {
     hash[..difficulty as usize].iter().all(|&b| b == 0)
 }
 
+fn is_zero_u32(value: &u32) -> bool {
+    *value == 0
+}
+
 fn serialize_bytes_as_base64<S>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
@@ -219,6 +232,7 @@ mod tests {
             peer_id: "test".to_string(),
             core_url: String::new(),
             max_qubits,
+            max_mps_qubits: 0,
             max_memory_gib: 0.0,
             requested_memory_gib: None,
             host_total_memory_bytes: 0,
@@ -296,6 +310,7 @@ mod tests {
             task_id: "task-a".to_string(),
             node_id: "node-b".to_string(),
             max_qubit_capability: 25,
+            max_mps_qubits: 2048,
             current_load_factors: 1,
             timestamp: 1_717_776_000,
             lottery_attempt: 7,

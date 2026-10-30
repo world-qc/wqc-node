@@ -44,6 +44,9 @@ pub struct SubTask {
     pub mps_max_bond_dim: u32,
     #[serde(default)]
     pub mps_site_order: Vec<u32>,
+    /// Gate index of a scalar time split. 0 means one MPS sweep.
+    #[serde(default)]
+    pub mps_time_split: u32,
     #[serde(default)]
     pub output_mode: String,
     #[serde(default)]
@@ -145,6 +148,11 @@ pub fn serialize_dispatch_payload(sub_task: &SubTask) -> Result<Vec<u8>, String>
     let security_level = sub_task.security_level.as_bytes();
     payload.extend_from_slice(&(security_level.len() as u32).to_be_bytes());
     payload.extend_from_slice(security_level);
+    // Match orchestrator: only present when a time split is set, so ordinary
+    // dispatches stay byte-identical to the pre-time-split wire.
+    if sub_task.mps_time_split != 0 {
+        payload.extend_from_slice(&sub_task.mps_time_split.to_be_bytes());
+    }
 
     Ok(payload)
 }
@@ -270,6 +278,11 @@ impl SubTask {
                 None
             } else {
                 Some(self.mps_site_order.iter().map(|&q| q as usize).collect())
+            },
+            mps_time_split: if self.mps_time_split > 0 {
+                Some(self.mps_time_split as usize)
+            } else {
+                None
             },
             output_mode: self.output_mode.clone(),
             classical_bit_count: if self.classical_bit_count > 0 {
@@ -449,5 +462,71 @@ mod tests {
         want_suffix.extend_from_slice(&3u32.to_be_bytes());
         want_suffix.extend_from_slice(b"low");
         assert!(payload.ends_with(&want_suffix));
+    }
+
+    #[test]
+    fn serialize_dispatch_payload_includes_time_split_when_set() {
+        let sub_task = SubTask {
+            task_id: "s".to_string(),
+            parent_task_id: "p".to_string(),
+            circuit_id: "c".to_string(),
+            qubit_count: 2,
+            original_qubit_count: 2,
+            slice_id: "0".to_string(),
+            mps_time_split: 196,
+            ..Default::default()
+        };
+        let payload = serialize_dispatch_payload(&sub_task).expect("serialize");
+        let mut want_suffix = Vec::new();
+        want_suffix.extend_from_slice(&0u32.to_be_bytes()); // security_level_len
+        want_suffix.extend_from_slice(&196u32.to_be_bytes());
+        assert!(payload.ends_with(&want_suffix));
+    }
+
+    #[test]
+    fn into_compute_request_maps_time_split_zero_to_none() {
+        let req = SubTask {
+            task_id: "s".into(),
+            parent_task_id: "p".into(),
+            circuit_id: "c".into(),
+            qubit_count: 2,
+            original_qubit_count: 2,
+            slice_id: "0".into(),
+            mps_time_split: 0,
+            ..Default::default()
+        }
+        .into_compute_request("peer");
+        assert_eq!(req.mps_time_split, None);
+    }
+
+    #[test]
+    fn into_compute_request_maps_time_split_to_some() {
+        let req = SubTask {
+            task_id: "s".into(),
+            parent_task_id: "p".into(),
+            circuit_id: "c".into(),
+            qubit_count: 2,
+            original_qubit_count: 2,
+            slice_id: "0".into(),
+            mps_time_split: 196,
+            ..Default::default()
+        }
+        .into_compute_request("peer");
+        assert_eq!(req.mps_time_split, Some(196));
+    }
+
+    #[test]
+    fn sub_task_json_reads_with_and_without_time_split() {
+        let bare: SubTask = serde_json::from_str(
+            r#"{"task_id":"s","parent_task_id":"p","circuit_id":"c","qubit_count":2,"original_qubit_count":2,"slice_id":"0","required_votes":1}"#,
+        )
+        .expect("bare");
+        assert_eq!(bare.mps_time_split, 0);
+
+        let split: SubTask = serde_json::from_str(
+            r#"{"task_id":"s","parent_task_id":"p","circuit_id":"c","qubit_count":2,"original_qubit_count":2,"slice_id":"0","required_votes":1,"mps_time_split":196}"#,
+        )
+        .expect("split");
+        assert_eq!(split.mps_time_split, 196);
     }
 }

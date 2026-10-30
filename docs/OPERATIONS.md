@@ -83,7 +83,7 @@ cargo run --release
 | :--- | :--- | :--- |
 | `WQC_NODE_STAKE_WQC` | `0.05` | Parsed to Planck (pWQC) for bid `stake_amount`. Up to 18 fractional digits. |
 | `WQC_TESTNET_NODE_KEY` | — | **Public testnet:** Node Key from the dashboard (`nk_…`). Derives operator identity and `operator_sig` on bids. Without it, bids are rejected. |
-| `WQC_MAX_MEMORY_GB` | unset = host−reserve | WQC RAM budget (GiB). Unset/empty → **host total − reserve** (1 GiB if host < 16 GiB, else 2 GiB; see `memory_budget.rs`). Explicit values are capped the same way. With WebGPU, effective bid budget = `min(RAM, VRAM−1 GiB)`. Derives max qubits (`2^n × 16` bytes). Nodes with `< 10` max qubits never bid (`NETWORK_MIN_QUBITS`). |
+| `WQC_MAX_MEMORY_GB` | unset = host−reserve | WQC RAM budget (GiB). Unset/empty → **host total − reserve** (1 GiB if host < 16 GiB, else 2 GiB; see `memory_budget.rs`). Explicit values are capped the same way. With WebGPU, effective bid budget = `min(RAM, VRAM−1 GiB)`. Derives dense max qubits (`2^n × 16` bytes) and scalar `max_mps_qubits` (`N · 128² · 32`). Nodes with `< 10` dense max qubits never bid (`NETWORK_MIN_QUBITS`). |
 | `WQC_COMPUTE_TIMEOUT_SECS` | `300` | Per-request timeout to core. |
 | `WQC_DATABASE_URL` | `sqlite:wqc-node.db` | Relative path is under the process working directory. |
 | `WQC_P2P_LISTEN_PORT` | `4002` | Bind `0.0.0.0` on TCP and QUIC. |
@@ -101,13 +101,13 @@ cargo run --release
 - An explicit value is still capped at that host−reserve ceiling — not a flat 80% rule
 - After connecting to core: if `tn_backend_active=webgpu` and `/sysinfo` reports `vram_budget_bytes`, bid envelope becomes `min(RAM_budget, VRAM_budget − 1 GiB)`; PCS remains RAM-only on core
 - Startup logs and `GET /status` expose `memory_cap_source` (`ram` or `vram`)
-- It then derives `max_qubits` from the dense envelope `2^n × 16` bytes
-- That derived value is what the node advertises to the orchestrator
+- It then derives `max_qubits` from the dense envelope `2^n × 16` bytes, and `max_mps_qubits` from the χ=128 MPS workspace `N · χ² · 32`
+- Both values are advertised. Scalar slices use `max_mps_qubits`. `sample_counts` and `expectation` stay on `max_qubits`
 
 Examples:
 
-- `1 GiB` budget → about `26` qubits
-- `16 GiB` budget → about `30` qubits
+- `1 GiB` budget → about `26` dense qubits, and `2048` MPS qubits
+- `16 GiB` budget → about `30` dense qubits, and `32768` MPS qubits
 
 If your node never bids, an overly small effective memory budget is one of the first things to check.
 

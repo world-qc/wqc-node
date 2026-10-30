@@ -113,6 +113,7 @@ mod tests {
             peer_id: peer_id.to_string(),
             core_url: String::new(),
             max_qubits: 28,
+            max_mps_qubits: 2048,
             max_memory_gib: 16.0,
             requested_memory_gib: Some(16.0),
             host_total_memory_bytes: 32 * 1024 * 1024 * 1024,

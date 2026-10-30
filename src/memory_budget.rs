@@ -1,6 +1,10 @@
 //! Dense statevector memory envelope: `2^n × 16` bytes (matches wqc-core / orchestrator Gas).
 
 pub const DENSE_AMPLITUDE_BYTES: u64 = 16;
+/// Bond used to advertise scalar MPS width. Matches `WQC_MPS_MAX_BOND_DIM` default.
+pub const MPS_BOND_DIM: u64 = 128;
+/// Bytes per site at bond χ: `χ × 2 × χ × 16` (complex64) = `χ² × 32`.
+pub const MPS_SITE_FACTOR_BYTES: u64 = 32;
 const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
 const GIB_U64: u64 = 1024 * 1024 * 1024;
 
@@ -52,6 +56,19 @@ pub fn max_wqc_memory_bytes_from_total(total_bytes: u64) -> u64 {
     max_wqc_memory_gib_from_total(gib).saturating_mul(GIB_U64)
 }
 
+/// Compact width whose χ=128 MPS workspace (`N · χ² · 32`) fits in `budget_bytes`.
+/// The bid field is `u32`, so a wider budget advertises `u32::MAX` and no more.
+pub fn max_qubits_from_mps_memory_budget(budget_bytes: u64) -> usize {
+    let per_qubit = MPS_BOND_DIM
+        .saturating_mul(MPS_BOND_DIM)
+        .saturating_mul(MPS_SITE_FACTOR_BYTES);
+    if per_qubit == 0 || budget_bytes < per_qubit {
+        return 0;
+    }
+    let width = (budget_bytes / per_qubit).min(u64::from(u32::MAX));
+    usize::try_from(width).unwrap_or(usize::MAX)
+}
+
 /// Maximum compact qubit width storable in `budget_bytes` at dense amplitude resolution.
 pub fn max_qubits_from_dense_memory_budget(budget_bytes: u64) -> usize {
     if budget_bytes < DENSE_AMPLITUDE_BYTES {
@@ -74,22 +91,26 @@ pub fn effective_memory_bytes(requested_gib: Option<f64>, total_physical_bytes: 
     }
 }
 
-/// Resolves `(max_qubits, effective_gib)` from optional `WQC_MAX_MEMORY_GB` and host RAM.
+/// Resolves `(dense_qubits, mps_qubits, effective_gib)` from optional `WQC_MAX_MEMORY_GB` and host RAM.
 pub fn resolve_max_qubits_from_memory_gb(
     requested_gib: Option<f64>,
     total_physical_bytes: u64,
-) -> (usize, f64) {
+) -> (usize, usize, f64) {
     let bytes = effective_memory_bytes(requested_gib, total_physical_bytes);
     let effective_gib = bytes as f64 / GIB;
-    (max_qubits_from_dense_memory_budget(bytes), effective_gib)
+    (
+        max_qubits_from_dense_memory_budget(bytes),
+        max_qubits_from_mps_memory_budget(bytes),
+        effective_gib,
+    )
 }
 
-/// Intersect RAM dense budget with adapter VRAM budget (WebGPU).
-/// Returns `(max_qubits, effective_gib, which cap won)`.
+/// Intersect RAM budget with adapter VRAM budget (WebGPU).
+/// Returns `(dense_qubits, mps_qubits, effective_gib, which cap won)`.
 pub fn resolve_max_qubits_with_optional_vram(
     ram_budget_bytes: u64,
     vram_budget_bytes: Option<u64>,
-) -> (usize, f64, MemoryCapSource) {
+) -> (usize, usize, f64, MemoryCapSource) {
     let (bytes, source) = match vram_budget_bytes.filter(|&b| b > 0) {
         Some(vram) => {
             let vram_usable = vram
@@ -106,6 +127,7 @@ pub fn resolve_max_qubits_with_optional_vram(
     let effective_gib = bytes as f64 / GIB;
     (
         max_qubits_from_dense_memory_budget(bytes),
+        max_qubits_from_mps_memory_budget(bytes),
         effective_gib,
         source,
     )
@@ -116,9 +138,18 @@ mod tests {
     use super::*;
 
     #[test]
+    fn mps_width_saturates_at_bid_field() {
+        assert_eq!(
+            max_qubits_from_mps_memory_budget(u64::MAX),
+            u32::MAX as usize
+        );
+    }
+
+    #[test]
     fn one_gib_yields_26_qubits() {
         let gib = GIB_U64;
         assert_eq!(max_qubits_from_dense_memory_budget(gib), 26);
+        assert_eq!(max_qubits_from_mps_memory_budget(gib), 2048);
     }
 
     #[test]
@@ -153,9 +184,11 @@ mod tests {
     #[test]
     fn resolve_applies_cap_before_qubit_conversion() {
         let total = 2 * GIB_U64;
-        let (qubits, effective_gib) = resolve_max_qubits_from_memory_gb(Some(16.0), total);
+        let (qubits, mps_qubits, effective_gib) =
+            resolve_max_qubits_from_memory_gb(Some(16.0), total);
         assert!((effective_gib - 1.0).abs() < 0.01);
         assert_eq!(qubits, 26);
+        assert_eq!(mps_qubits, max_qubits_from_mps_memory_budget(GIB_U64));
     }
 
     #[test]
@@ -169,17 +202,18 @@ mod tests {
     fn vram_smaller_than_ram_wins() {
         let ram = 16 * GIB_U64;
         let vram = 4 * GIB_U64; // usable 3 GiB after 1 GiB reserve
-        let (qubits, gib, src) = resolve_max_qubits_with_optional_vram(ram, Some(vram));
+        let (qubits, mps_qubits, gib, src) = resolve_max_qubits_with_optional_vram(ram, Some(vram));
         assert_eq!(src, MemoryCapSource::Vram);
         assert!((gib - 3.0).abs() < 0.01);
         assert_eq!(qubits, max_qubits_from_dense_memory_budget(3 * GIB_U64));
+        assert_eq!(mps_qubits, max_qubits_from_mps_memory_budget(3 * GIB_U64));
     }
 
     #[test]
     fn ram_smaller_than_vram_wins() {
         let ram = 2 * GIB_U64;
         let vram = 24 * GIB_U64;
-        let (_, gib, src) = resolve_max_qubits_with_optional_vram(ram, Some(vram));
+        let (_, _, gib, src) = resolve_max_qubits_with_optional_vram(ram, Some(vram));
         assert_eq!(src, MemoryCapSource::Ram);
         assert!((gib - 2.0).abs() < 0.01);
     }
@@ -187,7 +221,7 @@ mod tests {
     #[test]
     fn no_vram_keeps_ram() {
         let ram = 8 * GIB_U64;
-        let (_, _, src) = resolve_max_qubits_with_optional_vram(ram, None);
+        let (_, _, _, src) = resolve_max_qubits_with_optional_vram(ram, None);
         assert_eq!(src, MemoryCapSource::Ram);
     }
 }

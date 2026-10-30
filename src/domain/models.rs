@@ -38,6 +38,9 @@ pub struct ComputeRequest {
     /// Optional MPS path: `site_order[site] = logical` compact qubit (identity if absent).
     #[serde(default)]
     pub mps_site_order: Option<Vec<usize>>,
+    /// Gate index of a scalar time split. Absent means one MPS sweep.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mps_time_split: Option<usize>,
     #[serde(default)]
     pub output_mode: String,
     #[serde(default)]
@@ -114,6 +117,9 @@ pub struct WorkReport {
     pub tn_backend: String,
     #[serde(default)]
     pub vram_peak_bytes: u64,
+    /// Time-split scalars mark that the STARK does not bind the overlap.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub proof_scope: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -166,6 +172,8 @@ pub struct NodeStatus {
     pub pending_tasks: usize,
     pub outbox_pending: usize,
     pub max_qubits: usize,
+    /// χ=128 MPS compact width from the same memory budget as `max_qubits`.
+    pub max_mps_qubits: usize,
     pub max_memory_gib: f64,
     /// `ram` or `vram` — which envelope limited the dense bid budget.
     pub memory_cap_source: String,
@@ -200,4 +208,34 @@ pub struct CoreSystemInfo {
 
 fn default_pcs_memory_policy() -> String {
     crate::domain::pcs::PCS_MEMORY_POLICY_REFUSE.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::WorkReport;
+
+    fn sample_report(proof_scope: &str) -> WorkReport {
+        WorkReport {
+            trace_rows: 4,
+            gate_count: 1,
+            compute_wall_ms: 1,
+            prove_wall_ms: 1,
+            proof_bytes: 1,
+            tn_backend: String::new(),
+            vram_peak_bytes: 0,
+            proof_scope: proof_scope.to_string(),
+        }
+    }
+
+    #[test]
+    fn work_report_omits_empty_proof_scope() {
+        let json = serde_json::to_string(&sample_report("")).expect("ser");
+        assert!(!json.contains("proof_scope"), "{json}");
+    }
+
+    #[test]
+    fn work_report_emits_nonempty_proof_scope() {
+        let json = serde_json::to_string(&sample_report("mps_time_split")).expect("ser");
+        assert!(json.contains(r#""proof_scope":"mps_time_split""#), "{json}");
+    }
 }
