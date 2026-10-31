@@ -41,6 +41,9 @@ pub struct ComputeRequest {
     /// Gate index of a scalar time split. Absent means one MPS sweep.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mps_time_split: Option<usize>,
+    /// Exact contraction tree planned by the orchestrator. Absent keeps the MPS sweep.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contraction_tree: Option<ContractionTreeWire>,
     #[serde(default)]
     pub output_mode: String,
     #[serde(default)]
@@ -56,6 +59,33 @@ pub struct ComputeRequest {
     /// Orchestrator security tier (`low|normal|high|ultra`); empty → FRI default.
     #[serde(default)]
     pub security_level: String,
+}
+
+/// Exact scalar tree. Field order matches the orchestrator's signed JSON.
+/// The node forwards it and does not build another plan.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ContractionTreeWire {
+    pub nodes: Vec<ContractNodeWire>,
+    pub peak_bytes: u64,
+}
+
+/// One `contract` node. `op` is `contract`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ContractNodeWire {
+    pub op: String,
+    pub left: TensorRefWire,
+    pub right: TensorRefWire,
+}
+
+/// One operand. Exactly one of `ket0`, `gate`, or `node` is set.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TensorRefWire {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ket0: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gate: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
