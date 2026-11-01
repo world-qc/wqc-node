@@ -47,6 +47,9 @@ pub struct SubTask {
     /// Gate index of a scalar time split. 0 means one MPS sweep.
     #[serde(default)]
     pub mps_time_split: u32,
+    /// Exact tree from the orchestrator. Absent on an MPS dispatch.
+    #[serde(default)]
+    pub contraction_tree: Option<crate::domain::models::ContractionTreeWire>,
     #[serde(default)]
     pub output_mode: String,
     #[serde(default)]
@@ -152,6 +155,14 @@ pub fn serialize_dispatch_payload(sub_task: &SubTask) -> Result<Vec<u8>, String>
     // dispatches stay byte-identical to the pre-time-split wire.
     if sub_task.mps_time_split != 0 {
         payload.extend_from_slice(&sub_task.mps_time_split.to_be_bytes());
+    }
+    // Present only when the orchestrator attached a tree, so an MPS dispatch
+    // stays byte-identical and an old node rejects the tree signature.
+    if let Some(tree) = &sub_task.contraction_tree {
+        let tree_json = serde_json::to_vec(tree)
+            .map_err(|e| format!("marshal contraction tree for dispatch signing: {e}"))?;
+        payload.extend_from_slice(&(tree_json.len() as u32).to_be_bytes());
+        payload.extend_from_slice(&tree_json);
     }
 
     Ok(payload)
@@ -284,6 +295,7 @@ impl SubTask {
             } else {
                 None
             },
+            contraction_tree: self.contraction_tree,
             output_mode: self.output_mode.clone(),
             classical_bit_count: if self.classical_bit_count > 0 {
                 Some(self.classical_bit_count)
@@ -311,6 +323,7 @@ impl SubTask {
 mod tests {
     use super::*;
     use crate::domain::models::Gate;
+    use crate::domain::models::{ContractNodeWire, ContractionTreeWire, TensorRefWire};
 
     #[test]
     fn serialize_announcement_payload_layout_matches_orchestrator() {
@@ -528,5 +541,54 @@ mod tests {
         )
         .expect("split");
         assert_eq!(split.mps_time_split, 196);
+    }
+
+    #[test]
+    fn serialize_dispatch_payload_appends_tree_and_leaves_mps_bytes_unchanged() {
+        let bare = SubTask {
+            task_id: "s".into(),
+            parent_task_id: "p".into(),
+            circuit_id: "c".into(),
+            qubit_count: 1,
+            original_qubit_count: 1,
+            slice_id: "0".into(),
+            ..Default::default()
+        };
+        let plain = serialize_dispatch_payload(&bare).expect("plain");
+        let tree_json =
+            r#"{"nodes":[{"op":"contract","left":{"ket0":0},"right":{"gate":0}}],"peak_bytes":32}"#;
+        let with_tree = SubTask {
+            contraction_tree: Some(ContractionTreeWire {
+                nodes: vec![ContractNodeWire {
+                    op: "contract".into(),
+                    left: TensorRefWire {
+                        ket0: Some(0),
+                        gate: None,
+                        node: None,
+                    },
+                    right: TensorRefWire {
+                        ket0: None,
+                        gate: Some(0),
+                        node: None,
+                    },
+                }],
+                peak_bytes: 32,
+            }),
+            ..bare
+        };
+        let signed = serialize_dispatch_payload(&with_tree).expect("tree");
+        assert!(signed.starts_with(&plain));
+        assert_ne!(signed, plain);
+        let json = serde_json::to_vec(with_tree.contraction_tree.as_ref().unwrap()).unwrap();
+        assert_eq!(json, tree_json.as_bytes());
+        let mut suffix = (json.len() as u32).to_be_bytes().to_vec();
+        suffix.extend_from_slice(&json);
+        assert!(signed.ends_with(&suffix));
+        let forwarded = with_tree.into_compute_request("peer");
+        assert_eq!(
+            forwarded.contraction_tree.unwrap().nodes.len(),
+            1,
+            "the node forwards the orchestrator's tree"
+        );
     }
 }
