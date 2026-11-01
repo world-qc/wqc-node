@@ -125,8 +125,7 @@ pub fn serialize_dispatch_payload(sub_task: &SubTask) -> Result<Vec<u8>, String>
         payload.push(assignment.value);
     }
 
-    let circuit_json = serde_json::to_vec(&sub_task.circuit)
-        .map_err(|e| format!("marshal circuit for dispatch signing: {e}"))?;
+    let circuit_json = circuit_signing_json(&sub_task.circuit)?;
     payload.extend_from_slice(&(circuit_json.len() as u32).to_be_bytes());
     payload.extend_from_slice(&circuit_json);
     payload.extend_from_slice(&sub_task.mps_max_bond_dim.to_be_bytes());
@@ -166,6 +165,84 @@ pub fn serialize_dispatch_payload(sub_task: &SubTask) -> Result<Vec<u8>, String>
     }
 
     Ok(payload)
+}
+
+/// Circuit JSON as the orchestrator signs it: `[{"type":…,"params":…}]` with
+/// numbers written the way Go `encoding/json` writes a float64.
+fn circuit_signing_json(circuit: &[Gate]) -> Result<Vec<u8>, String> {
+    let mut out = String::from("[");
+    for (i, gate) in circuit.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        let gate_type = serde_json::to_string(&gate.r#type)
+            .map_err(|e| format!("marshal circuit for dispatch signing: {e}"))?;
+        out.push_str(r#"{"type":"#);
+        out.push_str(&gate_type);
+        out.push_str(r#","params":"#);
+        write_go_json_value(&mut out, &gate.params)?;
+        out.push('}');
+    }
+    out.push(']');
+    Ok(out.into_bytes())
+}
+
+/// Go decodes params into `any`, so every number is a float64 and object keys
+/// come out sorted. serde_json's default map is sorted the same way.
+fn write_go_json_value(out: &mut String, value: &serde_json::Value) -> Result<(), String> {
+    use serde_json::Value;
+    match value {
+        Value::Number(n) => match n.as_f64() {
+            Some(f) => out.push_str(&go_json_float(f)),
+            None => return Err(format!("circuit number {n} is not a float64")),
+        },
+        Value::Array(items) => {
+            out.push('[');
+            for (i, item) in items.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                write_go_json_value(out, item)?;
+            }
+            out.push(']');
+        }
+        Value::Object(map) => {
+            out.push('{');
+            for (i, (key, item)) in map.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                let key = serde_json::to_string(key)
+                    .map_err(|e| format!("marshal circuit for dispatch signing: {e}"))?;
+                out.push_str(&key);
+                out.push(':');
+                write_go_json_value(out, item)?;
+            }
+            out.push('}');
+        }
+        other => {
+            let text = serde_json::to_string(other)
+                .map_err(|e| format!("marshal circuit for dispatch signing: {e}"))?;
+            out.push_str(&text);
+        }
+    }
+    Ok(())
+}
+
+/// Go `encoding/json` float64: shortest digits, plain decimal unless
+/// |f| < 1e-6 or |f| >= 1e21, then `1e-7` / `1e+21` style.
+fn go_json_float(f: f64) -> String {
+    let abs = f.abs();
+    if abs != 0.0 && !(1e-6..1e21).contains(&abs) {
+        let exp_form = format!("{f:e}");
+        let (mantissa, exp) = exp_form.split_once('e').unwrap_or((&exp_form, "0"));
+        match exp.strip_prefix('-') {
+            Some(digits) => format!("{mantissa}e-{digits}"),
+            None => format!("{mantissa}e+{exp:0>2}"),
+        }
+    } else {
+        format!("{f}")
+    }
 }
 
 /// Canonical observables JSON for dispatch signing (matches orchestrator `FormatObservablesWireJSON`).
@@ -394,6 +471,43 @@ mod tests {
         expected.extend_from_slice(&0u32.to_be_bytes()); // mps_site_order_len
         expected.extend_from_slice(&0u32.to_be_bytes()); // security_level_len
         assert_eq!(payload, expected);
+    }
+
+    #[test]
+    fn go_json_float_matches_go_encoding_json() {
+        // Expected strings are Go `json.Marshal(float64)` output.
+        let cases: &[(f64, &str)] = &[
+            (1.1500000000000001, "1.1500000000000001"),
+            (-0.41000000000000003, "-0.41000000000000003"),
+            (2.4082865570993347e-6, "0.0000024082865570993347"),
+            (1e-6, "0.000001"),
+            (1e-7, "1e-7"),
+            (5e-324, "5e-324"),
+            (1e20, "100000000000000000000"),
+            (1e21, "1e+21"),
+            (1.5e300, "1.5e+300"),
+            (-0.0, "-0"),
+            (std::f64::consts::FRAC_PI_8, "0.39269908169872414"),
+            (3.0, "3"),
+        ];
+        for (value, expected) in cases {
+            assert_eq!(go_json_float(*value), *expected, "value {value:e}");
+        }
+    }
+
+    #[test]
+    fn circuit_signing_json_keeps_the_orchestrator_bytes() {
+        // Without float_roundtrip, 1.1500000000000001 parsed as 1.15 and the
+        // signature over this circuit failed on every node.
+        let signed = concat!(
+            r#"[{"type":"RY","params":[17,1.1500000000000001]},"#,
+            r#"{"type":"RZ","params":[0,0.0000024082865570993347]},"#,
+            r#"{"type":"MEASURE","params":{"cbit":0,"qubit":1}},"#,
+            r#"{"type":"H","params":[3]}]"#,
+        );
+        let circuit: Vec<Gate> = serde_json::from_str(signed).expect("parse circuit");
+        let bytes = circuit_signing_json(&circuit).expect("signing json");
+        assert_eq!(String::from_utf8(bytes).unwrap(), signed);
     }
 
     #[test]
