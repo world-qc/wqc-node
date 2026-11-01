@@ -3931,6 +3931,7 @@ dependencies = [
  "prometheus",
  "reqwest",
  "rusqlite",
+ "ryu",
  "serde",
  "serde_json",
  "sha2",
