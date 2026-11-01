@@ -19,7 +19,11 @@ num-bigint = { version = "0.4", features = ["serde"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rusqlite = { version = "0.39", features = ["bundled"] }
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+# float_roundtrip: parse signed rotation angles to the exact f64 the
+# orchestrator marshaled, so the re-serialized circuit matches its signature.
+serde_json = { version = "1.0", features = ["float_roundtrip"] }
+# Shortest float digits with Go's tie rule, for dispatch signing.
+ryu = "1.0"
 sha2 = "0.10"
 hex = "0.4"
 hmac = "0.12"

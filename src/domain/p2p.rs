@@ -125,8 +125,7 @@ pub fn serialize_dispatch_payload(sub_task: &SubTask) -> Result<Vec<u8>, String>
         payload.push(assignment.value);
     }
 
-    let circuit_json = serde_json::to_vec(&sub_task.circuit)
-        .map_err(|e| format!("marshal circuit for dispatch signing: {e}"))?;
+    let circuit_json = circuit_signing_json(&sub_task.circuit)?;
     payload.extend_from_slice(&(circuit_json.len() as u32).to_be_bytes());
     payload.extend_from_slice(&circuit_json);
     payload.extend_from_slice(&sub_task.mps_max_bond_dim.to_be_bytes());
@@ -166,6 +165,146 @@ pub fn serialize_dispatch_payload(sub_task: &SubTask) -> Result<Vec<u8>, String>
     }
 
     Ok(payload)
+}
+
+/// Circuit JSON as the orchestrator signs it: `[{"type":…,"params":…}]` with
+/// numbers and strings written the way Go `encoding/json` writes them.
+fn circuit_signing_json(circuit: &[Gate]) -> Result<Vec<u8>, String> {
+    let mut out = String::from("[");
+    for (i, gate) in circuit.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push_str(r#"{"type":"#);
+        write_go_json_string(&mut out, &gate.r#type);
+        out.push_str(r#","params":"#);
+        write_go_json_value(&mut out, &gate.params)?;
+        out.push('}');
+    }
+    out.push(']');
+    Ok(out.into_bytes())
+}
+
+/// Go decodes params into `any`, so every number is a float64 and object keys
+/// come out sorted. serde_json's default map is sorted the same way.
+fn write_go_json_value(out: &mut String, value: &serde_json::Value) -> Result<(), String> {
+    use serde_json::Value;
+    match value {
+        Value::Null => out.push_str("null"),
+        Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+        Value::Number(n) => match n.as_f64() {
+            Some(f) => out.push_str(&go_json_float(f)),
+            None => return Err(format!("circuit number {n} is not a float64")),
+        },
+        Value::String(text) => write_go_json_string(out, text),
+        Value::Array(items) => {
+            out.push('[');
+            for (i, item) in items.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                write_go_json_value(out, item)?;
+            }
+            out.push(']');
+        }
+        Value::Object(map) => {
+            out.push('{');
+            for (i, (key, item)) in map.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                write_go_json_string(out, key);
+                out.push(':');
+                write_go_json_value(out, item)?;
+            }
+            out.push('}');
+        }
+    }
+    Ok(())
+}
+
+/// Go `encoding/json` string with HTML escaping: `<`, `>`, `&`, U+2028 and
+/// U+2029 become `\u` escapes; `\b \f \n \r \t` keep their short form.
+fn write_go_json_string(out: &mut String, text: &str) {
+    out.push('"');
+    for ch in text.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\u{8}' => out.push_str("\\b"),
+            '\u{c}' => out.push_str("\\f"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '<' | '>' | '&' | '\u{2028}' | '\u{2029}' => {
+                out.push_str(&format!("\\u{:04x}", ch as u32));
+            }
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+}
+
+/// Go `encoding/json` float64. Ryu picks the shortest digits with the same
+/// tie rule as Go (Rust's Display rounds ties away from zero, so
+/// 1533979136307259.25 would end in 3 instead of Go's 2). The layout follows
+/// Go: plain decimal unless |f| < 1e-6 or |f| >= 1e21, then `1e-7` / `1e+21`.
+fn go_json_float(f: f64) -> String {
+    if f == 0.0 {
+        return if f.is_sign_negative() { "-0" } else { "0" }.to_string();
+    }
+    let mut buffer = ryu::Buffer::new();
+    let (sign, digits, exp) = decimal_digits(buffer.format_finite(f));
+    let abs = f.abs();
+    let body = if (1e-6..1e21).contains(&abs) {
+        plain_decimal(&digits, exp)
+    } else {
+        let mantissa = match digits.len() {
+            1 => digits.clone(),
+            _ => format!("{}.{}", &digits[..1], &digits[1..]),
+        };
+        if exp < 0 {
+            format!("{mantissa}e-{}", -exp)
+        } else {
+            format!("{mantissa}e+{exp:02}")
+        }
+    };
+    format!("{sign}{body}")
+}
+
+/// Splits ryu output (`1.15`, `1e20`, `2.4e-6`) into sign, significant
+/// digits without leading or trailing zeros, and the exponent of the first
+/// digit, so the value is `d.ddd × 10^exp`.
+fn decimal_digits(text: &str) -> (&'static str, String, i32) {
+    let (sign, text) = match text.strip_prefix('-') {
+        Some(rest) => ("-", rest),
+        None => ("", text),
+    };
+    let (mantissa, exp_part) = text.split_once('e').unwrap_or((text, "0"));
+    let exp_part: i32 = exp_part.parse().unwrap_or(0);
+    let point = mantissa.find('.').unwrap_or(mantissa.len()) as i32;
+    let all: String = mantissa.chars().filter(|c| *c != '.').collect();
+    let leading = all.len() - all.trim_start_matches('0').len();
+    let digits = all
+        .trim_start_matches('0')
+        .trim_end_matches('0')
+        .to_string();
+    (sign, digits, point - 1 - leading as i32 + exp_part)
+}
+
+/// `d.ddd × 10^exp` written without an exponent.
+fn plain_decimal(digits: &str, exp: i32) -> String {
+    if exp < 0 {
+        let zeros = "0".repeat((-exp - 1) as usize);
+        return format!("0.{zeros}{digits}");
+    }
+    let int_len = exp as usize + 1;
+    if digits.len() <= int_len {
+        format!("{digits}{}", "0".repeat(int_len - digits.len()))
+    } else {
+        format!("{}.{}", &digits[..int_len], &digits[int_len..])
+    }
 }
 
 /// Canonical observables JSON for dispatch signing (matches orchestrator `FormatObservablesWireJSON`).
@@ -394,6 +533,65 @@ mod tests {
         expected.extend_from_slice(&0u32.to_be_bytes()); // mps_site_order_len
         expected.extend_from_slice(&0u32.to_be_bytes()); // security_level_len
         assert_eq!(payload, expected);
+    }
+
+    #[test]
+    fn go_json_float_matches_go_encoding_json() {
+        // Expected strings are Go `json.Marshal(float64)` output.
+        let cases: &[(f64, &str)] = &[
+            (1.1500000000000001, "1.1500000000000001"),
+            (-0.41000000000000003, "-0.41000000000000003"),
+            (2.4082865570993347e-6, "0.0000024082865570993347"),
+            (1e-6, "0.000001"),
+            (1e-7, "1e-7"),
+            (5e-324, "5e-324"),
+            (1e20, "100000000000000000000"),
+            (1e21, "1e+21"),
+            (1.5e300, "1.5e+300"),
+            (-0.0, "-0"),
+            (std::f64::consts::FRAC_PI_8, "0.39269908169872414"),
+            (3.0, "3"),
+            // 1533979136307259.25 is exact and halfway between two shortest
+            // forms; Go keeps the even digit. Built from parts because the
+            // literal trips clippy::excessive_precision.
+            (1_533_979_136_307_259.0 + 0.25, "1533979136307259.2"),
+            (-(1_533_979_136_307_259.0 + 0.25), "-1533979136307259.2"),
+            (123456789012345680000.0, "123456789012345680000"),
+            (1.5e-300, "1.5e-300"),
+        ];
+        for (value, expected) in cases {
+            assert_eq!(go_json_float(*value), *expected, "value {value:e}");
+        }
+    }
+
+    #[test]
+    fn circuit_signing_json_keeps_the_orchestrator_bytes() {
+        // Without float_roundtrip, 1.1500000000000001 parsed as 1.15 and the
+        // signature over this circuit failed on every node.
+        let signed = concat!(
+            r#"[{"type":"RY","params":[17,1.1500000000000001]},"#,
+            r#"{"type":"RZ","params":[0,0.0000024082865570993347]},"#,
+            r#"{"type":"MEASURE","params":{"cbit":0,"qubit":1}},"#,
+            r#"{"type":"IF","params":{"cbit":2,"gate":{"params":[0],"type":"X"},"value":1}},"#,
+            r#"{"type":"H","params":[3]}]"#,
+        );
+        let circuit: Vec<Gate> = serde_json::from_str(signed).expect("parse circuit");
+        let bytes = circuit_signing_json(&circuit).expect("signing json");
+        assert_eq!(String::from_utf8(bytes).unwrap(), signed);
+    }
+
+    #[test]
+    fn go_json_string_matches_go_encoding_json() {
+        // Expected string is Go 1.26 `json.Marshal` output.
+        let mut out = String::new();
+        write_go_json_string(
+            &mut out,
+            "a<b>&c\u{8}\u{c}\n\r\t\u{1}\u{1f}\"\\ \u{2028}\u{2029} 日本",
+        );
+        assert_eq!(
+            out,
+            r#""a\u003cb\u003e\u0026c\b\f\n\r\t\u0001\u001f\"\\ \u2028\u2029 日本""#
+        );
     }
 
     #[test]
