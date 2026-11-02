@@ -62,9 +62,14 @@ pub struct ComputeRequest {
 }
 
 /// Exact scalar tree. Field order matches the orchestrator's signed JSON.
-/// The node forwards it and does not build another plan.
+/// The node forwards it and does not build another plan. Every key the
+/// orchestrator can send is here: a key serde dropped would be missing when
+/// the node re-encodes the tree, and the signature would fail.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ContractionTreeWire {
+    /// `network` for a whole-circuit tensor network. Absent is the state tree.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
     pub nodes: Vec<ContractNodeWire>,
     pub peak_bytes: u64,
 }
@@ -77,8 +82,9 @@ pub struct ContractNodeWire {
     pub right: TensorRefWire,
 }
 
-/// One operand. Exactly one of `ket0`, `gate`, or `node` is set.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// One operand. Exactly one of `ket0`, `gate`, `node`, or `bra0` is set.
+/// `bra0` appears only in a network tree.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct TensorRefWire {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ket0: Option<u32>,
@@ -86,6 +92,8 @@ pub struct TensorRefWire {
     pub gate: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub node: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bra0: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

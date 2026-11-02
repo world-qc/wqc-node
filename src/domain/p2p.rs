@@ -757,17 +757,16 @@ mod tests {
             r#"{"nodes":[{"op":"contract","left":{"ket0":0},"right":{"gate":0}}],"peak_bytes":32}"#;
         let with_tree = SubTask {
             contraction_tree: Some(ContractionTreeWire {
+                kind: None,
                 nodes: vec![ContractNodeWire {
                     op: "contract".into(),
                     left: TensorRefWire {
                         ket0: Some(0),
-                        gate: None,
-                        node: None,
+                        ..Default::default()
                     },
                     right: TensorRefWire {
-                        ket0: None,
                         gate: Some(0),
-                        node: None,
+                        ..Default::default()
                     },
                 }],
                 peak_bytes: 32,
@@ -788,5 +787,36 @@ mod tests {
             1,
             "the node forwards the orchestrator's tree"
         );
+    }
+
+    /// The orchestrator's network tree for one `H`
+    /// (`TestSerializeDispatchPayloadSignsTheNetworkTreeJSON`). The node must
+    /// re-encode it byte for byte, or the signature over it fails.
+    #[test]
+    fn network_tree_round_trips_byte_for_byte() {
+        let tree_json = r#"{"kind":"network","nodes":[{"op":"contract","left":{"ket0":0},"right":{"gate":0}},{"op":"contract","left":{"bra0":0},"right":{"node":0}}],"peak_bytes":128}"#;
+        let tree: ContractionTreeWire = serde_json::from_str(tree_json).expect("parse");
+        assert_eq!(tree.kind.as_deref(), Some("network"));
+        assert_eq!(tree.nodes[1].left.bra0, Some(0));
+        assert_eq!(serde_json::to_string(&tree).unwrap(), tree_json);
+
+        let sub = SubTask {
+            task_id: "s".into(),
+            parent_task_id: "p".into(),
+            circuit_id: "c".into(),
+            qubit_count: 1,
+            original_qubit_count: 1,
+            slice_id: "0".into(),
+            contraction_tree: Some(tree),
+            ..Default::default()
+        };
+        let signed = serialize_dispatch_payload(&sub).expect("tree");
+        let mut suffix = (tree_json.len() as u32).to_be_bytes().to_vec();
+        suffix.extend_from_slice(tree_json.as_bytes());
+        assert!(signed.ends_with(&suffix));
+        let forwarded = sub.into_compute_request("peer");
+        let body = serde_json::to_value(&forwarded).expect("request");
+        assert_eq!(body["contraction_tree"]["kind"], "network");
+        assert_eq!(body["contraction_tree"]["nodes"][1]["left"]["bra0"], 0);
     }
 }
