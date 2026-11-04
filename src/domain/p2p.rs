@@ -819,4 +819,31 @@ mod tests {
         assert_eq!(body["contraction_tree"]["kind"], "network");
         assert_eq!(body["contraction_tree"]["nodes"][1]["left"]["bra0"], 0);
     }
+
+    #[test]
+    fn gate_halves_round_trip_byte_for_byte() {
+        // The orchestrator's TestSerializeDispatchPayloadSignsGateHalves text.
+        let tree_json = r#"{"kind":"network","nodes":[{"op":"contract","left":{"control":0},"right":{"target":0}},{"op":"contract","left":{"node":0},"right":{"node":0}}],"peak_bytes":384}"#;
+        let tree: ContractionTreeWire = serde_json::from_str(tree_json).expect("parse");
+        assert_eq!(tree.nodes[0].left.control, Some(0));
+        assert_eq!(tree.nodes[0].right.target, Some(0));
+        assert_eq!(serde_json::to_string(&tree).unwrap(), tree_json);
+        let sub = SubTask {
+            task_id: "s".into(),
+            parent_task_id: "p".into(),
+            circuit_id: "c".into(),
+            qubit_count: 2,
+            original_qubit_count: 2,
+            slice_id: "0".into(),
+            contraction_tree: Some(tree),
+            ..Default::default()
+        };
+        let signed = serialize_dispatch_payload(&sub).expect("tree");
+        let mut suffix = (tree_json.len() as u32).to_be_bytes().to_vec();
+        suffix.extend_from_slice(tree_json.as_bytes());
+        assert!(signed.ends_with(&suffix));
+        let body = serde_json::to_value(sub.into_compute_request("peer")).expect("request");
+        assert_eq!(body["contraction_tree"]["nodes"][0]["left"]["control"], 0);
+        assert_eq!(body["contraction_tree"]["nodes"][0]["right"]["target"], 0);
+    }
 }

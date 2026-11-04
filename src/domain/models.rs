@@ -82,8 +82,9 @@ pub struct ContractNodeWire {
     pub right: TensorRefWire,
 }
 
-/// One operand. Exactly one of `ket0`, `gate`, `node`, or `bra0` is set.
-/// `bra0` appears only in a network tree.
+/// One operand. Exactly one of `ket0`, `gate`, `node`, `bra0`, `control`, or
+/// `target` is set. `bra0` and the gate halves `control` and `target` appear
+/// only in a network tree. The field order is the orchestrator's JSON order.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct TensorRefWire {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -94,6 +95,10 @@ pub struct TensorRefWire {
     pub node: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bra0: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub control: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
