@@ -2,6 +2,9 @@
 
 pub const FEATURE_STANDARD_GATES: u32 = 1 << 0;
 pub const FEATURE_CUSTOM_UNITARY: u32 = 1 << 1;
+/// Network trees that take a CNOT or CZ as `control` and `target` halves.
+/// wqc-core lists `NETWORK_GATE_SPLIT` under `/gates`.
+pub const FEATURE_NETWORK_GATE_SPLIT: u32 = 1 << 3;
 
 /// Maps gate names (from `GET /gates`) to the orchestrator feature bitmask.
 pub fn features_from_gates(gates: &[String]) -> u32 {
@@ -19,6 +22,9 @@ fn apply_gate_feature(features: &mut u32, gate: &str) {
         }
         "RX" | "RY" | "RZ" => {
             *features |= FEATURE_CUSTOM_UNITARY;
+        }
+        "NETWORK_GATE_SPLIT" => {
+            *features |= FEATURE_NETWORK_GATE_SPLIT;
         }
         _ => {}
     }
@@ -51,5 +57,23 @@ mod tests {
     #[test]
     fn empty_gate_list_yields_zero() {
         assert_eq!(features_from_gates(&[]), 0);
+    }
+
+    #[test]
+    fn core_split_capability_sets_its_bit() {
+        let gates = vec!["CNOT".into(), "NETWORK_GATE_SPLIT".into()];
+        let features = features_from_gates(&gates);
+        assert_eq!(
+            features,
+            FEATURE_STANDARD_GATES | FEATURE_NETWORK_GATE_SPLIT
+        );
+        assert!(!supports_required_features(
+            FEATURE_STANDARD_GATES,
+            FEATURE_STANDARD_GATES | FEATURE_NETWORK_GATE_SPLIT
+        ));
+        assert!(supports_required_features(
+            features,
+            FEATURE_STANDARD_GATES | FEATURE_NETWORK_GATE_SPLIT
+        ));
     }
 }
