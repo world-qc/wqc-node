@@ -461,6 +461,8 @@ mod tests {
                 security_level: String::new(),
             },
             orchestrator_pubkey: "orch-pubkey".to_string(),
+            budget: None,
+            accepted_at_ms: 0,
         }
     }
 

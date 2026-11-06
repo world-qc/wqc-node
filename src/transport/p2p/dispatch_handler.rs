@@ -57,8 +57,13 @@ async fn handle_dispatch_stream(
         .map_err(|e| anyhow::anyhow!("dispatch rejected: {e}"))?;
 
     let request = message.sub_task.into_compute_request(&config.peer_id);
+    let budget = state
+        .work
+        .lock()
+        .expect("work ledger")
+        .budget(&parent_task_id);
 
-    accept_task::accept_compute_task(&state, request, orchestrator_pubkey)
+    accept_task::accept_compute_task(&state, request, orchestrator_pubkey, budget)
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?;
 

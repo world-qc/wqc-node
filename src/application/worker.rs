@@ -3,11 +3,13 @@ use std::sync::Arc;
 
 use tokio::sync::mpsc;
 
+use crate::application::accept_task::unix_now_ms;
 use crate::application::ports::ResultSink;
 use crate::application::state::AppState;
 use crate::domain::models::{
     ComplexResult, ComputeRequest, ComputeTask, ExpectationResult, SampleResult, TaskResultPayload,
 };
+use crate::domain::work::compute_timeout;
 use crate::infra::core_client::WqcCoreClient;
 
 struct TaskResultData {
@@ -37,8 +39,30 @@ async fn process_task(state: Arc<AppState>, result_sink: Arc<dyn ResultSink>, ta
     let pubkey = task.orchestrator_pubkey.clone();
 
     tracing::info!("Worker: Starting task {}", task_id);
+    state
+        .work
+        .lock()
+        .expect("work ledger")
+        .start(&task_id, std::time::Instant::now());
+    let waited = if task.accepted_at_ms == 0 {
+        std::time::Duration::ZERO
+    } else {
+        std::time::Duration::from_millis(unix_now_ms().saturating_sub(task.accepted_at_ms))
+    };
+    let outcome = match compute_timeout(
+        state.config.compute_timeout_secs,
+        task.budget.as_ref(),
+        waited,
+    ) {
+        Some(timeout) => execute_compute(&state.core_client, &task.request, timeout).await,
+        // The orchestrator has given up on it; core would only delay the queue.
+        None => Err(anyhow::anyhow!(
+            "deadline passed after {}s in the node queue",
+            waited.as_secs()
+        )),
+    };
 
-    let payload = match execute_compute(&state.core_client, &task.request).await {
+    let payload = match outcome {
         Ok(data) => TaskResultPayload {
             task_id: task_id.clone(),
             status: "success".to_string(),
@@ -92,6 +116,7 @@ async fn process_task(state: Arc<AppState>, result_sink: Arc<dyn ResultSink>, ta
     }
 
     state.pending_tasks.fetch_sub(1, Ordering::SeqCst);
+    state.work.lock().expect("work ledger").release(&task_id);
     tracing::info!("Worker: Finished task {}", task_id);
 }
 
@@ -103,9 +128,10 @@ fn failure_reason(err: &anyhow::Error) -> String {
 async fn execute_compute(
     core_client: &WqcCoreClient,
     request: &ComputeRequest,
+    timeout: std::time::Duration,
 ) -> anyhow::Result<TaskResultData> {
     let start_time = std::time::Instant::now();
-    let res = core_client.dispatch_task(request.clone()).await?;
+    let res = core_client.dispatch_task(request.clone(), timeout).await?;
     let execution_time_ms = start_time.elapsed().as_millis() as u64;
 
     Ok(TaskResultData {

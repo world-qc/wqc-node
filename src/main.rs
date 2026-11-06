@@ -83,9 +83,16 @@ async fn main() -> anyhow::Result<()> {
         storage,
         p2p_stream_control: tokio::sync::Mutex::new(None),
         open_call_cache: tokio::sync::Mutex::new(std::collections::HashMap::new()),
+        work: std::sync::Mutex::new(Default::default()),
     });
 
     for task in pending_from_db {
+        // Restored work occupies the worker like new work.
+        shared_state.work.lock().expect("work ledger").hold(
+            &task.request.task_id,
+            task.request.parent_task_id.as_deref(),
+            task.budget.as_ref(),
+        );
         tx.send(task).await?;
     }
 

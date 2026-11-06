@@ -135,7 +135,13 @@ impl WqcCoreClient {
         Ok(())
     }
 
-    pub async fn dispatch_task(&self, request: ComputeRequest) -> Result<ComputeResponse> {
+    /// `timeout` is at most the configured compute timeout (see
+    /// `domain::work::compute_timeout`).
+    pub async fn dispatch_task(
+        &self,
+        request: ComputeRequest,
+        timeout: Duration,
+    ) -> Result<ComputeResponse> {
         self.ensure_ready().await?;
 
         let url = format!("{}/compute", self.base_url);
@@ -144,7 +150,7 @@ impl WqcCoreClient {
         let response = match self
             .client
             .post(&url)
-            .timeout(self.compute_timeout)
+            .timeout(timeout.min(self.compute_timeout))
             .json(&request)
             .send()
             .await

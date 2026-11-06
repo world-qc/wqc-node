@@ -239,6 +239,10 @@ mod tests {
             memory_cap_source: crate::memory_budget::MemoryCapSource::Ram,
             vram_budget_gib: None,
             compute_timeout_secs: 300,
+            tn_rates: None,
+            work_budget_margin: 0.5,
+            work_overhead_secs: 5.0,
+            work_unknown_secs: 30.0,
             pcs_timeout_secs: 7200,
             signing_key: SigningKey::from_bytes(&[0u8; 32]),
             bootstrap_urls: vec![],
@@ -265,6 +269,8 @@ mod tests {
             bid_difficulty: 0,
             required_votes: 1,
             nonce: 1,
+            deadline_secs: None,
+            work: None,
         };
         assert!(should_bid_on(
             &announcement,
@@ -282,6 +288,8 @@ mod tests {
             bid_difficulty: 0,
             required_votes: 1,
             nonce: 1,
+            deadline_secs: None,
+            work: None,
         };
         assert!(!should_bid_on(
             &announcement,
@@ -299,6 +307,8 @@ mod tests {
             bid_difficulty: 0,
             required_votes: 1,
             nonce: 1,
+            deadline_secs: None,
+            work: None,
         };
         assert!(!should_bid_on(&announcement, &test_config(28), 0));
     }

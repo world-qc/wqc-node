@@ -5,6 +5,9 @@ pub const FEATURE_CUSTOM_UNITARY: u32 = 1 << 1;
 /// Network trees that take a CNOT or CZ as `control` and `target` halves.
 /// wqc-core lists `NETWORK_GATE_SPLIT` under `/gates`.
 pub const FEATURE_NETWORK_GATE_SPLIT: u32 = 1 << 3;
+/// This node judges announced `work` against its own speed and timeout
+/// (docs `work-budget.md` §3). Set when core reports its rates.
+pub const FEATURE_WORK_BUDGET: u32 = 1 << 4;
 
 /// Maps gate names (from `GET /gates`) to the orchestrator feature bitmask.
 pub fn features_from_gates(gates: &[String]) -> u32 {
@@ -30,6 +33,16 @@ fn apply_gate_feature(features: &mut u32, gate: &str) {
     }
 }
 
+/// This node's bid mask: the gate features, plus [`FEATURE_WORK_BUDGET`] when
+/// it can judge work.
+pub fn node_features(gates: &[String], judges_work: bool) -> u32 {
+    let mut features = features_from_gates(gates);
+    if judges_work {
+        features |= FEATURE_WORK_BUDGET;
+    }
+    features
+}
+
 /// Returns true when `supported` covers every bit in `required`.
 pub fn supports_required_features(supported: u32, required: u32) -> bool {
     (supported & required) == required
@@ -51,6 +64,16 @@ mod tests {
         assert_eq!(
             features_from_gates(&gates),
             FEATURE_STANDARD_GATES | FEATURE_CUSTOM_UNITARY
+        );
+    }
+
+    #[test]
+    fn work_budget_bit_follows_core_rates() {
+        let gates = vec!["H".into()];
+        assert_eq!(node_features(&gates, false), FEATURE_STANDARD_GATES);
+        assert_eq!(
+            node_features(&gates, true),
+            FEATURE_STANDARD_GATES | FEATURE_WORK_BUDGET
         );
     }
 
