@@ -42,6 +42,9 @@ async fn main() -> anyhow::Result<()> {
         Duration::from_secs(config.compute_timeout_secs),
         Duration::from_secs(config.pcs_timeout_secs),
     ));
+    if !core_client.wait_until_up(Duration::from_secs(120)).await {
+        tracing::warn!("wqc-core did not answer /health within 120s; syncing anyway");
+    }
     let supported_gates = handlers::sync_core_capabilities(core_client.clone()).await;
     let core_sysinfo = core_client.get_system_info().await.ok();
     if let Some(ref info) = core_sysinfo {
