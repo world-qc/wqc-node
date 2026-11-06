@@ -84,7 +84,10 @@ cargo run --release
 | `WQC_NODE_STAKE_WQC` | `0.05` | Parsed to Planck (pWQC) for bid `stake_amount`. Up to 18 fractional digits. |
 | `WQC_TESTNET_NODE_KEY` | — | **Public testnet:** Node Key from the dashboard (`nk_…`). Derives operator identity and `operator_sig` on bids. Without it, bids are rejected. |
 | `WQC_MAX_MEMORY_GB` | unset = host−reserve | WQC RAM budget (GiB). Unset/empty → **host total − reserve** (1 GiB if host < 16 GiB, else 2 GiB; see `memory_budget.rs`). Explicit values are capped the same way. With WebGPU, effective bid budget = `min(RAM, VRAM−1 GiB)`. Derives dense max qubits (`2^n × 16` bytes) and scalar `max_mps_qubits` (`N · 128² · 32`). Nodes with `< 10` dense max qubits never bid (`NETWORK_MIN_QUBITS`). |
-| `WQC_COMPUTE_TIMEOUT_SECS` | `300` | Per-request timeout to core. |
+| `WQC_COMPUTE_TIMEOUT_SECS` | `300` | Per-request timeout to core. A task that announces a shorter deadline uses that instead. |
+| `WQC_WORK_BUDGET_MARGIN` | `0.5` | Share of `min(deadline, WQC_COMPUTE_TIMEOUT_SECS)` announced work may use, queue included. |
+| `WQC_WORK_OVERHEAD_SECS` | `5` | Proving and transfer time added to every work estimate. |
+| `WQC_WORK_UNKNOWN_SECS` | `30` | What each held sub-task without announced work counts toward the queue. |
 | `WQC_DATABASE_URL` | `sqlite:wqc-node.db` | Relative path is under the process working directory. |
 | `WQC_P2P_LISTEN_PORT` | `4002` | Bind `0.0.0.0` on TCP and QUIC. |
 | `WQC_HTTP_PORT` | `8080` | Admin API only. |

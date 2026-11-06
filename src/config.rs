@@ -1,6 +1,7 @@
 use std::env;
 
 use crate::domain::models::CoreSystemInfo;
+use crate::domain::work::TnRates;
 use crate::memory_budget::{
     effective_memory_bytes, resolve_max_qubits_from_memory_gb,
     resolve_max_qubits_with_optional_vram, MemoryCapSource,
@@ -36,6 +37,18 @@ pub struct NodeConfig {
     /// Adapter VRAM budget from core `/sysinfo` when WebGPU (GiB), if known.
     pub vram_budget_gib: Option<f64>,
     pub compute_timeout_secs: u64,
+    /// Core's contraction rates from `/sysinfo`; `None` for an older core,
+    /// and then the node does not bid on announced work.
+    pub tn_rates: Option<TnRates>,
+    /// Share of `min(deadline, compute timeout)` an estimate may use
+    /// (`WQC_WORK_BUDGET_MARGIN`, default 0.5).
+    pub work_budget_margin: f64,
+    /// Proving and transfer added to every work estimate
+    /// (`WQC_WORK_OVERHEAD_SECS`, default 5).
+    pub work_overhead_secs: f64,
+    /// What a held sub-task without work counts toward the queue
+    /// (`WQC_WORK_UNKNOWN_SECS`, default 30).
+    pub work_unknown_secs: f64,
     /// Wall-clock budget for deferred `POST /leaf_pcs` (default 7200s).
     pub pcs_timeout_secs: u64,
     pub signing_key: SigningKey,
@@ -75,6 +88,27 @@ impl NodeConfig {
             .unwrap_or_else(|_| "300".to_string())
             .parse()
             .context("WQC_COMPUTE_TIMEOUT_SECS must be a valid positive integer")?;
+        let work_budget_margin: f64 = env::var("WQC_WORK_BUDGET_MARGIN")
+            .unwrap_or_else(|_| "0.5".to_string())
+            .parse()
+            .context("WQC_WORK_BUDGET_MARGIN must be a number")?;
+        if !(work_budget_margin > 0.0 && work_budget_margin <= 1.0) {
+            anyhow::bail!("WQC_WORK_BUDGET_MARGIN must be in (0, 1], got {work_budget_margin}");
+        }
+        let work_overhead_secs: f64 = env::var("WQC_WORK_OVERHEAD_SECS")
+            .unwrap_or_else(|_| "5".to_string())
+            .parse()
+            .context("WQC_WORK_OVERHEAD_SECS must be a number")?;
+        if !(work_overhead_secs >= 0.0 && work_overhead_secs.is_finite()) {
+            anyhow::bail!("WQC_WORK_OVERHEAD_SECS must be non-negative, got {work_overhead_secs}");
+        }
+        let work_unknown_secs: f64 = env::var("WQC_WORK_UNKNOWN_SECS")
+            .unwrap_or_else(|_| "30".to_string())
+            .parse()
+            .context("WQC_WORK_UNKNOWN_SECS must be a number")?;
+        if !(work_unknown_secs >= 0.0 && work_unknown_secs.is_finite()) {
+            anyhow::bail!("WQC_WORK_UNKNOWN_SECS must be non-negative, got {work_unknown_secs}");
+        }
         let pcs_timeout_secs = env::var("WQC_PCS_TIMEOUT_SECS")
             .unwrap_or_else(|_| "7200".to_string())
             .parse()
@@ -167,6 +201,10 @@ impl NodeConfig {
             memory_cap_source: MemoryCapSource::Ram,
             vram_budget_gib: None,
             compute_timeout_secs,
+            tn_rates: None,
+            work_budget_margin,
+            work_overhead_secs,
+            work_unknown_secs,
             pcs_timeout_secs,
             signing_key,
             bootstrap_urls,
@@ -186,6 +224,17 @@ impl NodeConfig {
 
     /// After core `/sysinfo`: if WebGPU is active, take `min(RAM, VRAM−reserve)` for bids.
     pub fn apply_core_sysinfo(&mut self, info: &CoreSystemInfo) {
+        self.tn_rates = TnRates::from_sysinfo(info.tn_seconds_per_byte, info.tn_seconds_per_flop);
+        match self.tn_rates {
+            Some(r) => tracing::info!(
+                "Core contraction rates: {:.2} GB/s traffic, {:.2} Gflop/s; bidding on announced work",
+                1e-9 / r.seconds_per_byte,
+                1e-9 / r.seconds_per_flop.max(f64::MIN_POSITIVE)
+            ),
+            None => tracing::warn!(
+                "Core reports no contraction rates; not bidding on tasks that announce work"
+            ),
+        }
         let ram_bytes =
             effective_memory_bytes(self.requested_memory_gib, self.host_total_memory_bytes);
 

@@ -1,6 +1,6 @@
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use futures::{AsyncWriteExt, StreamExt};
 use libp2p::PeerId;
@@ -12,6 +12,7 @@ use crate::config::NodeConfig;
 use crate::domain::bid;
 use crate::domain::features;
 use crate::domain::p2p::TaskAnnouncement;
+use crate::domain::work::BudgetPolicy;
 use crate::infra::geoip;
 use crate::transport::p2p::stream_io::write_outbound_stream_expect_ack;
 
@@ -35,7 +36,8 @@ impl BidClient {
         announcement: TaskAnnouncement,
         orchestrator_peer_id: PeerId,
     ) -> anyhow::Result<()> {
-        let supported_features = features::features_from_gates(&self.state.supported_gates);
+        let supported_features =
+            features::node_features(&self.state.supported_gates, self.config.tn_rates.is_some());
         if !bid::should_bid_on(&announcement, &self.config, supported_features) {
             tracing::debug!(
                 "[P2P Bid] Skipping task_id={} (capability/feature mismatch, supported_features=0x{:x})",
@@ -43,6 +45,35 @@ impl BidClient {
                 supported_features
             );
             return Ok(());
+        }
+        // Bit 4 is set only with rates, so announced work always has them here.
+        if let (Some(work), Some(rates)) = (announcement.work, self.config.tn_rates) {
+            let policy = BudgetPolicy {
+                rates,
+                overhead_secs: self.config.work_overhead_secs,
+                margin: self.config.work_budget_margin,
+                own_timeout_secs: self.config.compute_timeout_secs,
+                unknown_secs: self.config.work_unknown_secs,
+            };
+            let deadline_secs = announcement.deadline_secs.unwrap_or(0);
+            let decision = self.state.work.lock().expect("work ledger").decide(
+                &announcement.task_id,
+                &work,
+                deadline_secs,
+                &policy,
+                Instant::now(),
+            );
+            if let Err(expected) = decision {
+                tracing::info!(
+                    "[P2P Bid] Skipping task_id={} (expected {:.0}s with queue, past {:.2} of min(deadline {}s, timeout {}s))",
+                    announcement.task_id,
+                    expected,
+                    policy.margin,
+                    deadline_secs,
+                    policy.own_timeout_secs
+                );
+                return Ok(());
+            }
         }
 
         let current_load = self.state.pending_tasks.load(Ordering::Relaxed) as u32;

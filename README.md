@@ -121,7 +121,10 @@ WQC_P2P_LISTEN_PORT: "4002"
 | `WQC_NODE_STAKE_WQC` | no | `0.05` | Human WQC amount sent as `stake_amount` (Planck integer on wire). |
 | `WQC_TESTNET_NODE_KEY` | testnet | — | Node Key from [testnet.world-qc.io](https://testnet.world-qc.io). Derives `operator_id` and signs `operator_sig` on bids. Required on public testnet. |
 | `WQC_MAX_MEMORY_GB` | no | unset = host−reserve | WQC RAM budget (GiB). Unset/empty → host total minus 1/2 GiB reserve (`memory_budget.rs`). Explicit value is capped the same way. When core reports WebGPU + `vram_budget_bytes`, bid envelope is `min(RAM, VRAM−1 GiB)`. Derives `max_qubit_capability` as `floor(log2(budget / 16))` (dense `2^n × 16`) and `max_mps_qubits` as `budget / (128² × 32)` for scalar slices. |
-| `WQC_COMPUTE_TIMEOUT_SECS` | no | `300` | Timeout for `POST /compute` to core. |
+| `WQC_COMPUTE_TIMEOUT_SECS` | no | `300` | Timeout for `POST /compute` to core. A task that announces a shorter deadline uses that instead. |
+| `WQC_WORK_BUDGET_MARGIN` | no | `0.5` | Share of `min(deadline, WQC_COMPUTE_TIMEOUT_SECS)` the expected time of announced work, queue included, may use before the node skips the bid. |
+| `WQC_WORK_OVERHEAD_SECS` | no | `5` | Proving and transfer time added to every work estimate. |
+| `WQC_WORK_UNKNOWN_SECS` | no | `30` | What each held sub-task without announced work counts toward the queue when judging new work. |
 | `WQC_CORE_HEALTH_FAIL_THRESHOLD` | no | `3` | Consecutive unreachable core errors before opening the health-gate. |
 | `WQC_CORE_HEALTH_BACKOFF_SECS` | no | `30` | Seconds to skip core `/compute` and `/leaf_pcs` prove calls while the gate is open. |
 | `WQC_P2P_LISTEN_PORT` | no | `4002` | TCP/QUIC listen port for libp2p. |

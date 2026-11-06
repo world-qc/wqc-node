@@ -128,6 +128,14 @@ pub struct ExpectationResult {
 pub struct ComputeTask {
     pub request: ComputeRequest,
     pub orchestrator_pubkey: String,
+    /// The work budget this node bid with, when the announcement carried one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget: Option<crate::domain::work::Budget>,
+    /// Unix milliseconds when the node accepted the dispatch. The deadline
+    /// counts from then, so queueing time comes off it. 0 on a task stored
+    /// before this field existed.
+    #[serde(default)]
+    pub accepted_at_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -247,6 +255,11 @@ pub struct CoreSystemInfo {
     /// Adapter `max_buffer_size` when core WebGPU is active.
     #[serde(default)]
     pub vram_budget_bytes: Option<u64>,
+    /// Contraction rates measured by core at startup; absent on an older core.
+    #[serde(default)]
+    pub tn_seconds_per_byte: Option<f64>,
+    #[serde(default)]
+    pub tn_seconds_per_flop: Option<f64>,
 }
 
 fn default_pcs_memory_policy() -> String {

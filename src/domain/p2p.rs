@@ -3,6 +3,7 @@ use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::Deserialize;
 use serde_json;
 
+use crate::domain::features::FEATURE_WORK_BUDGET;
 use crate::domain::models::{Gate, ObservableSpec, SliceAssignment};
 
 pub const ANNOUNCEMENT_TOPIC: &str = "wqc-global-announcements";
@@ -18,12 +19,28 @@ pub struct TaskAnnouncement {
     pub bid_difficulty: u32,
     pub required_votes: u32,
     pub nonce: u64,
+    /// Sub-task deadline the orchestrator enforces, from dispatch. Present
+    /// with `work` only.
+    #[serde(default)]
+    pub deadline_secs: Option<u32>,
+    /// Planner counts for one sub-task (docs `work-budget.md` §1).
+    #[serde(default)]
+    pub work: Option<Work>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq)]
+pub struct Work {
+    pub traffic_bytes: u64,
+    pub flops: u64,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct TaskAnnouncementMessage {
     pub announcement: TaskAnnouncement,
     pub signature: String,
+    /// Covers the v1 layout plus `deadline_secs` and `work`.
+    #[serde(default)]
+    pub signature_v2: Option<String>,
 }
 
 /// SubTask mirrors the orchestrator dispatch payload.
@@ -78,6 +95,17 @@ pub fn serialize_announcement_payload(announcement: &TaskAnnouncement) -> Vec<u8
     payload
 }
 
+/// The v1 layout followed by `deadline_secs`, `traffic_bytes`, and `flops`
+/// (docs `work-budget.md` §3). `None` without `work` or `deadline_secs`.
+pub fn serialize_announcement_payload_v2(announcement: &TaskAnnouncement) -> Option<Vec<u8>> {
+    let work = announcement.work?;
+    let mut payload = serialize_announcement_payload(announcement);
+    payload.extend_from_slice(&announcement.deadline_secs?.to_be_bytes());
+    payload.extend_from_slice(&work.traffic_bytes.to_be_bytes());
+    payload.extend_from_slice(&work.flops.to_be_bytes());
+    Some(payload)
+}
+
 pub fn parse_signed_announcement(
     payload: &[u8],
     orchestrator_public_key_b64: &str,
@@ -92,6 +120,29 @@ pub fn verify_announcement_message(
     message: &TaskAnnouncementMessage,
     orchestrator_public_key_b64: &str,
 ) -> Result<(), String> {
+    // Bit 4 means the task has work. The v1 signature does not cover `work`,
+    // so a relay could strip it; such an announcement is dropped.
+    if message.announcement.required_features & FEATURE_WORK_BUDGET != 0
+        && (message.announcement.work.is_none() || message.announcement.deadline_secs.is_none())
+    {
+        return Err("announcement asks for the work budget without work".to_string());
+    }
+    // `work` is trusted only under the v2 signature, which also covers every
+    // v1 field.
+    if message.announcement.work.is_some() {
+        let signed_payload = serialize_announcement_payload_v2(&message.announcement)
+            .ok_or_else(|| "announcement work has no deadline".to_string())?;
+        let signature = message
+            .signature_v2
+            .as_deref()
+            .ok_or_else(|| "announcement work is not signed".to_string())?;
+        return verify_orchestrator_signature(
+            &signed_payload,
+            signature,
+            orchestrator_public_key_b64,
+            "announcement v2",
+        );
+    }
     let signed_payload = serialize_announcement_payload(&message.announcement);
     verify_orchestrator_signature(
         &signed_payload,
@@ -473,6 +524,8 @@ mod tests {
             bid_difficulty: 2,
             required_votes: 2,
             nonce: 42,
+            deadline_secs: None,
+            work: None,
         };
 
         let payload = serialize_announcement_payload(&announcement);
@@ -484,6 +537,85 @@ mod tests {
         expected.extend_from_slice(&2u32.to_be_bytes());
         expected.extend_from_slice(&42u64.to_be_bytes());
         assert_eq!(payload, expected);
+    }
+
+    const GOLDEN_V2: &str = "74000000640000001b000000010000000200000000000000090000012c000001000000000000000008d8f9fc00";
+
+    #[test]
+    fn announcement_work_needs_the_v2_signature() {
+        use ed25519_dalek::{Signer, SigningKey};
+        let key = SigningKey::from_bytes(&[7u8; 32]);
+        let public = STANDARD.encode(key.verifying_key().to_bytes());
+        let sign = |bytes: &[u8]| STANDARD.encode(key.sign(bytes).to_bytes());
+        let announcement = TaskAnnouncement {
+            task_id: "t".to_string(),
+            global_qubit_count: 100,
+            required_features: 27,
+            bid_difficulty: 1,
+            required_votes: 2,
+            nonce: 9,
+            deadline_secs: Some(300),
+            work: Some(Work {
+                traffic_bytes: 1 << 40,
+                flops: 38_000_000_000,
+            }),
+        };
+        let v1 = sign(&serialize_announcement_payload(&announcement));
+        let v2 = sign(&serialize_announcement_payload_v2(&announcement).unwrap());
+        let message =
+            |announcement: TaskAnnouncement, v2: Option<String>| TaskAnnouncementMessage {
+                announcement,
+                signature: v1.clone(),
+                signature_v2: v2,
+            };
+
+        // The v2 layout appends deadline, traffic, and flops, big-endian. The
+        // orchestrator's TestSerializeAnnouncementPayloadV2AppendsWork checks
+        // the same bytes.
+        let expected: Vec<u8> = (0..GOLDEN_V2.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&GOLDEN_V2[i..i + 2], 16).unwrap())
+            .collect();
+        assert_eq!(
+            serialize_announcement_payload_v2(&announcement).unwrap(),
+            expected
+        );
+
+        assert!(verify_announcement_message(
+            &message(announcement.clone(), Some(v2.clone())),
+            &public
+        )
+        .is_ok());
+        // v1 alone does not vouch for work.
+        let err =
+            verify_announcement_message(&message(announcement.clone(), None), &public).unwrap_err();
+        assert!(err.contains("not signed"), "{err}");
+        // A changed work count fails.
+        let mut lighter = announcement.clone();
+        lighter.work = Some(Work {
+            traffic_bytes: 1,
+            flops: 1,
+        });
+        assert!(verify_announcement_message(&message(lighter, Some(v2)), &public).is_err());
+        // Stripping work and signature_v2 leaves a valid v1 signature, but
+        // bit 4 says work belongs there.
+        let mut stripped = announcement.clone();
+        stripped.work = None;
+        stripped.deadline_secs = None;
+        let err = verify_announcement_message(&message(stripped, None), &public).unwrap_err();
+        assert!(err.contains("without work"), "{err}");
+        // Without work or bit 4, v1 is checked as before.
+        let mut plain = announcement;
+        plain.work = None;
+        plain.deadline_secs = None;
+        plain.required_features &= !FEATURE_WORK_BUDGET;
+        let v1_plain = sign(&serialize_announcement_payload(&plain));
+        let ok = TaskAnnouncementMessage {
+            announcement: plain,
+            signature: v1_plain,
+            signature_v2: None,
+        };
+        assert!(verify_announcement_message(&ok, &public).is_ok());
     }
 
     #[test]

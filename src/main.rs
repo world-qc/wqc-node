@@ -42,6 +42,9 @@ async fn main() -> anyhow::Result<()> {
         Duration::from_secs(config.compute_timeout_secs),
         Duration::from_secs(config.pcs_timeout_secs),
     ));
+    if !core_client.wait_until_up(Duration::from_secs(120)).await {
+        tracing::warn!("wqc-core did not answer /health within 120s; syncing anyway");
+    }
     let supported_gates = handlers::sync_core_capabilities(core_client.clone()).await;
     let core_sysinfo = core_client.get_system_info().await.ok();
     if let Some(ref info) = core_sysinfo {
@@ -83,9 +86,16 @@ async fn main() -> anyhow::Result<()> {
         storage,
         p2p_stream_control: tokio::sync::Mutex::new(None),
         open_call_cache: tokio::sync::Mutex::new(std::collections::HashMap::new()),
+        work: std::sync::Mutex::new(Default::default()),
     });
 
     for task in pending_from_db {
+        // Restored work occupies the worker like new work.
+        shared_state.work.lock().expect("work ledger").hold(
+            &task.request.task_id,
+            task.request.parent_task_id.as_deref(),
+            task.budget.as_ref(),
+        );
         tx.send(task).await?;
     }
 

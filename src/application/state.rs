@@ -10,6 +10,7 @@ use crate::application::ports::TaskIngress;
 use crate::config::NodeConfig;
 use crate::domain::models::ComputeTask;
 use crate::domain::pcs::PcsOpenCall;
+use crate::domain::work::WorkLedger;
 use crate::infra::core_client::WqcCoreClient;
 use crate::infra::storage::Storage;
 
@@ -24,6 +25,8 @@ pub struct AppState {
     pub p2p_stream_control: tokio::sync::Mutex<Option<Arc<tokio::sync::Mutex<Control>>>>,
     /// Latest CAS open-call announcement per sub_task (presigned URL for builders).
     pub open_call_cache: tokio::sync::Mutex<HashMap<String, PcsOpenCall>>,
+    /// Work budgets bid on and budgeted sub-tasks held.
+    pub work: std::sync::Mutex<WorkLedger>,
 }
 
 #[async_trait]

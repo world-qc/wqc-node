@@ -6,6 +6,7 @@ use crate::application::state::AppState;
 use crate::domain::models::{ComputeRequest, ComputeTask};
 use crate::domain::validation::normalize_gate_params;
 use crate::domain::validation::validate_circuit_logic;
+use crate::domain::work::Budget;
 
 fn dispatch_payload_matches(existing: &ComputeTask, incoming: &ComputeTask) -> bool {
     if existing.orchestrator_pubkey != incoming.orchestrator_pubkey {
@@ -22,6 +23,13 @@ fn dispatch_payload_matches(existing: &ComputeTask, incoming: &ComputeTask) -> b
         (Ok(a), Ok(b)) => a == b,
         _ => false,
     }
+}
+
+pub fn unix_now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 fn is_unique_violation(err: &impl std::fmt::Display) -> bool {
@@ -67,6 +75,7 @@ pub async fn accept_compute_task(
     state: &Arc<AppState>,
     mut request: ComputeRequest,
     orchestrator_pubkey: &str,
+    budget: Option<Budget>,
 ) -> Result<(), AcceptTaskError> {
     let limit = compact_qubit_limit(
         &request.output_mode,
@@ -92,6 +101,8 @@ pub async fn accept_compute_task(
     let task = ComputeTask {
         request,
         orchestrator_pubkey: orchestrator_pubkey.to_string(),
+        budget,
+        accepted_at_ms: unix_now_ms(),
     };
 
     if let Some(existing) = state
@@ -125,8 +136,19 @@ pub async fn accept_compute_task(
     }
 
     state.pending_tasks.fetch_add(1, Ordering::SeqCst);
+    let sub_task_id = task.request.task_id.clone();
+    state.work.lock().expect("work ledger").hold(
+        &sub_task_id,
+        task.request.parent_task_id.as_deref(),
+        task.budget.as_ref(),
+    );
     if state.enqueue(task).await.is_err() {
         state.pending_tasks.fetch_sub(1, Ordering::SeqCst);
+        state
+            .work
+            .lock()
+            .expect("work ledger")
+            .release(&sub_task_id);
         return Err(AcceptTaskError::QueueFull);
     }
 
@@ -167,6 +189,8 @@ mod tests {
                 security_level: String::new(),
             },
             orchestrator_pubkey: "orch-pubkey".to_string(),
+            budget: None,
+            accepted_at_ms: 0,
         }
     }
 

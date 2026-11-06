@@ -135,7 +135,29 @@ impl WqcCoreClient {
         Ok(())
     }
 
-    pub async fn dispatch_task(&self, request: ComputeRequest) -> Result<ComputeResponse> {
+    /// `timeout` is at most the configured compute timeout (see
+    /// `domain::work::compute_timeout`).
+    /// Polls `/health` once a second until core answers or `limit` passes.
+    /// Core measures its contraction rates before it serves, so a node that
+    /// starts beside it would otherwise read `/gates` and `/sysinfo` too early.
+    pub async fn wait_until_up(&self, limit: Duration) -> bool {
+        let deadline = Instant::now() + limit;
+        loop {
+            if self.probe_health().await.is_ok() {
+                return true;
+            }
+            if Instant::now() >= deadline {
+                return false;
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    }
+
+    pub async fn dispatch_task(
+        &self,
+        request: ComputeRequest,
+        timeout: Duration,
+    ) -> Result<ComputeResponse> {
         self.ensure_ready().await?;
 
         let url = format!("{}/compute", self.base_url);
@@ -144,7 +166,7 @@ impl WqcCoreClient {
         let response = match self
             .client
             .post(&url)
-            .timeout(self.compute_timeout)
+            .timeout(timeout.min(self.compute_timeout))
             .json(&request)
             .send()
             .await
