@@ -4,7 +4,6 @@ use std::sync::Arc;
 use crate::application::ports::TaskIngress;
 use crate::application::state::AppState;
 use crate::domain::models::{ComputeRequest, ComputeTask};
-use crate::domain::validation::normalize_gate_params;
 use crate::domain::validation::validate_circuit_logic;
 use crate::domain::work::Budget;
 
@@ -95,7 +94,6 @@ pub async fn accept_compute_task(
     )
     .map_err(AcceptTaskError::Validation)?;
 
-    normalize_gate_params(&mut request.circuit);
     request.node_id = Some(state.config.peer_id.clone());
 
     let task = ComputeTask {

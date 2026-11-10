@@ -1,31 +1,6 @@
 use crate::domain::models::Gate;
 use serde_json::Value;
 
-pub fn normalize_gate_params(circuit: &mut [Gate]) {
-    for gate in circuit.iter_mut() {
-        normalize_gate_value(&mut gate.params);
-    }
-}
-
-fn normalize_gate_value(params: &mut Value) {
-    if let Some(arr) = params.as_array() {
-        if arr.len() == 1 {
-            *params = arr[0].clone();
-            return;
-        }
-    }
-
-    if let Some(obj) = params.as_object_mut() {
-        if let Some(nested) = obj.get_mut("gate") {
-            if let Some(nested_obj) = nested.as_object_mut() {
-                if let Some(nested_params) = nested_obj.get_mut("params") {
-                    normalize_gate_value(nested_params);
-                }
-            }
-        }
-    }
-}
-
 pub fn validate_circuit_logic(
     circuit: &[Gate],
     qubit_count: usize,
@@ -43,6 +18,13 @@ fn validate_gate(
     qubit_count: usize,
     supported_gates: &[String],
 ) -> Result<(), String> {
+    // The orchestrator dispatches one operand as a bare value, the form wqc-core reads; a
+    // one-element array would fail in core, so it is refused here.
+    if gate.params.as_array().is_some_and(|a| a.len() == 1) {
+        return Err(format!(
+            "gate {idx} has a one-element params array (expected a bare value)"
+        ));
+    }
     if !supported_gates.contains(&gate.r#type) {
         return Err(format!(
             "Gate '{}' at index {} not supported",
@@ -143,17 +125,15 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn normalize_flattens_if_nested_gate_params() {
-        let mut circuit = vec![Gate {
-            r#type: "IF".to_string(),
-            params: json!({
-                "cbit": 0,
-                "value": 1,
-                "gate": {"type": "X", "params": [1]}
-            }),
-        }];
-        normalize_gate_params(&mut circuit);
-        assert_eq!(circuit[0].params["gate"]["params"], json!(1));
+    fn rejects_one_element_params_arrays() {
+        let err = validate_circuit_logic(&[gate("H", json!([0]))], 2, &supported()).unwrap_err();
+        assert!(err.contains("one-element"), "{err}");
+        let nested = json!({"cbit": 0, "value": 1, "gate": {"type": "X", "params": [1]}});
+        let err = validate_circuit_logic(&[gate("IF", nested)], 2, &supported()).unwrap_err();
+        assert!(err.contains("one-element"), "{err}");
+        let nested = json!({"cbit": 0, "value": 1, "gate": {"type": "X", "params": 1}});
+        validate_circuit_logic(&[gate("H", json!(0)), gate("IF", nested)], 2, &supported())
+            .unwrap();
     }
 
     fn gate(ty: &str, params: Value) -> Gate {
