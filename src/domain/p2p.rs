@@ -710,6 +710,14 @@ mod tests {
         let circuit: Vec<Gate> = serde_json::from_str(signed).expect("parse circuit");
         let bytes = circuit_signing_json(&circuit).expect("signing json");
         assert_eq!(String::from_utf8(bytes).unwrap(), signed);
+        // The canonical form the orchestrator dispatches: one operand as a bare value.
+        let canonical = concat!(
+            r#"[{"type":"H","params":0},{"type":"X","params":2},"#,
+            r#"{"type":"IF","params":{"cbit":0,"gate":{"params":1,"type":"X"},"value":1}}]"#,
+        );
+        let circuit: Vec<Gate> = serde_json::from_str(canonical).expect("parse circuit");
+        let bytes = circuit_signing_json(&circuit).expect("signing json");
+        assert_eq!(String::from_utf8(bytes).unwrap(), canonical);
     }
 
     #[test]
