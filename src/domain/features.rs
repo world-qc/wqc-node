@@ -8,6 +8,9 @@ pub const FEATURE_NETWORK_GATE_SPLIT: u32 = 1 << 3;
 /// This node judges announced `work` against its own speed and timeout
 /// (docs `work-budget.md` §3). Set when core reports its rates.
 pub const FEATURE_WORK_BUDGET: u32 = 1 << 4;
+/// This node proves v2 (sv-stark) leaves up to its bid's `sv_max_rows`. Set when that is
+/// nonzero.
+pub const FEATURE_SV_STARK_V2: u32 = 1 << 5;
 
 /// Maps gate names (from `GET /gates`) to the orchestrator feature bitmask.
 pub fn features_from_gates(gates: &[String]) -> u32 {
@@ -34,11 +37,14 @@ fn apply_gate_feature(features: &mut u32, gate: &str) {
 }
 
 /// This node's bid mask: the gate features, plus [`FEATURE_WORK_BUDGET`] when
-/// it can judge work.
-pub fn node_features(gates: &[String], judges_work: bool) -> u32 {
+/// it can judge work and [`FEATURE_SV_STARK_V2`] when it proves v2 leaves.
+pub fn node_features(gates: &[String], judges_work: bool, proves_sv: bool) -> u32 {
     let mut features = features_from_gates(gates);
     if judges_work {
         features |= FEATURE_WORK_BUDGET;
+    }
+    if proves_sv {
+        features |= FEATURE_SV_STARK_V2;
     }
     features
 }
@@ -70,11 +76,21 @@ mod tests {
     #[test]
     fn work_budget_bit_follows_core_rates() {
         let gates = vec!["H".into()];
-        assert_eq!(node_features(&gates, false), FEATURE_STANDARD_GATES);
+        assert_eq!(node_features(&gates, false, false), FEATURE_STANDARD_GATES);
         assert_eq!(
-            node_features(&gates, true),
+            node_features(&gates, true, false),
             FEATURE_STANDARD_GATES | FEATURE_WORK_BUDGET
         );
+    }
+
+    #[test]
+    fn sv_stark_bit_follows_sv_max_rows() {
+        let gates = vec!["H".into()];
+        assert_eq!(
+            node_features(&gates, false, true),
+            FEATURE_STANDARD_GATES | FEATURE_SV_STARK_V2
+        );
+        assert_eq!(FEATURE_SV_STARK_V2, 1 << 5);
     }
 
     #[test]

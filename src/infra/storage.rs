@@ -459,6 +459,7 @@ mod tests {
                 observables: vec![],
                 noise_model: None,
                 security_level: String::new(),
+                sv_leaf_rows: None,
             },
             orchestrator_pubkey: "orch-pubkey".to_string(),
             budget: None,

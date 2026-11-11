@@ -70,6 +70,17 @@ pub fn compact_qubit_limit(output_mode: &str, max_qubits: usize, max_mps_qubits:
     }
 }
 
+/// A v2 leaf larger than this node advertised would run out of memory or time, and the node
+/// would be slashed for it; refuse it instead (docs `p2p-protocols.md` §5).
+fn check_sv_leaf_rows(rows: u64, sv_max_rows: u64) -> Result<(), AcceptTaskError> {
+    if rows > sv_max_rows {
+        return Err(AcceptTaskError::Validation(format!(
+            "v2 leaf of {rows} gate rows exceeds this node's sv_max_rows {sv_max_rows}"
+        )));
+    }
+    Ok(())
+}
+
 pub async fn accept_compute_task(
     state: &Arc<AppState>,
     mut request: ComputeRequest,
@@ -85,6 +96,10 @@ pub async fn accept_compute_task(
         return Err(AcceptTaskError::Validation(
             "Requested qubit_count exceeds node limit".to_string(),
         ));
+    }
+
+    if let Some(rows) = request.sv_leaf_rows {
+        check_sv_leaf_rows(rows, state.config.sv_max_rows)?;
     }
 
     validate_circuit_logic(
@@ -185,6 +200,7 @@ mod tests {
                 observables: vec![],
                 noise_model: None,
                 security_level: String::new(),
+                sv_leaf_rows: None,
             },
             orchestrator_pubkey: "orch-pubkey".to_string(),
             budget: None,
@@ -199,6 +215,16 @@ mod tests {
         assert_eq!(compact_qubit_limit("expectation", 26, 2048), 26);
         assert_eq!(compact_qubit_limit("sample_counts", 26, 2048), 26);
         assert_eq!(compact_qubit_limit("statevector_scalar", 26, 0), 26);
+    }
+
+    #[test]
+    fn refuses_v2_leaves_over_sv_max_rows() {
+        assert!(check_sv_leaf_rows(1 << 18, 1 << 18).is_ok());
+        assert!(check_sv_leaf_rows((1 << 18) + 1, 1 << 18).is_err());
+        assert!(
+            check_sv_leaf_rows(1, 0).is_err(),
+            "a node without v2 refuses every leaf"
+        );
     }
 
     #[test]

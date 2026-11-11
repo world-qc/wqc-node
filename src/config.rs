@@ -1,6 +1,7 @@
 use std::env;
 
 use crate::domain::models::CoreSystemInfo;
+use crate::domain::sv::{sv_max_rows, SvRates};
 use crate::domain::work::TnRates;
 use crate::memory_budget::{
     effective_memory_bytes, resolve_max_qubits_from_memory_gb,
@@ -40,6 +41,9 @@ pub struct NodeConfig {
     /// Core's contraction rates from `/sysinfo`; `None` for an older core,
     /// and then the node does not bid on announced work.
     pub tn_rates: Option<TnRates>,
+    /// Largest v2 leaf, in gate rows, this node proves (`domain::sv::sv_max_rows` from core's
+    /// `/sysinfo`); 0 for none. Advertised in bids with capability bit 5.
+    pub sv_max_rows: u64,
     /// Share of `min(deadline, compute timeout)` an estimate may use
     /// (`WQC_WORK_BUDGET_MARGIN`, default 0.5).
     pub work_budget_margin: f64,
@@ -202,6 +206,7 @@ impl NodeConfig {
             vram_budget_gib: None,
             compute_timeout_secs,
             tn_rates: None,
+            sv_max_rows: 0,
             work_budget_margin,
             work_overhead_secs,
             work_unknown_secs,
@@ -237,6 +242,24 @@ impl NodeConfig {
         }
         let ram_bytes =
             effective_memory_bytes(self.requested_memory_gib, self.host_total_memory_bytes);
+        // v2 leaves prove on the CPU, so the RAM budget, not the VRAM-capped one.
+        let sv_rates = SvRates::from_sysinfo(
+            info.sv_seconds_per_row,
+            info.sv_bytes_per_row,
+            info.sv_base_bytes,
+        );
+        self.sv_max_rows = sv_max_rows(sv_rates, ram_bytes, self.compute_timeout_secs);
+        match sv_rates {
+            Some(r) if self.sv_max_rows > 0 => tracing::info!(
+                "Core proves v2 leaves at {:.0} µs per gate row; advertising sv_max_rows = {}",
+                r.seconds_per_row * 1e6,
+                self.sv_max_rows
+            ),
+            Some(_) => tracing::warn!(
+                "Core proves v2 leaves, but none fits this node's memory and timeout"
+            ),
+            None => tracing::info!("Core does not prove v2 leaves; not advertising them"),
+        }
 
         let vram_raw = if info.tn_backend_active.eq_ignore_ascii_case("webgpu") {
             info.vram_budget_bytes.filter(|&b| b > 0)
