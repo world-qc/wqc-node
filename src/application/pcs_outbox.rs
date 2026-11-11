@@ -63,6 +63,7 @@ fn placeholder_proof(sub_task_id: &str, node_id: &str, slice_id: &str) -> Proof 
             output_result_hash: String::new(),
             measurement_spec_hash: String::new(),
             security_level: String::new(),
+            sv_digest: Vec::new(),
         },
         stark_proof_b64: String::new(),
     }

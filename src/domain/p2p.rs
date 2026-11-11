@@ -81,6 +81,9 @@ pub struct SubTask {
     pub noise_model: Option<crate::domain::models::NoiseModel>,
     #[serde(default)]
     pub security_level: String,
+    /// Prove as a v2 (sv-stark) leaf of this many gate rows. 0 means v1.
+    #[serde(default)]
+    pub sv_leaf_rows: u64,
 }
 
 /// Mirrors orchestrator `bid.SerializeAnnouncementPayload` byte layout exactly.
@@ -213,6 +216,11 @@ pub fn serialize_dispatch_payload(sub_task: &SubTask) -> Result<Vec<u8>, String>
             .map_err(|e| format!("marshal contraction tree for dispatch signing: {e}"))?;
         payload.extend_from_slice(&(tree_json.len() as u32).to_be_bytes());
         payload.extend_from_slice(&tree_json);
+    }
+    // Present only on a v2 leaf, after the tree, so a v1 dispatch stays byte-identical and
+    // an old node rejects a v2 one.
+    if sub_task.sv_leaf_rows != 0 {
+        payload.extend_from_slice(&sub_task.sv_leaf_rows.to_be_bytes());
     }
 
     Ok(payload)
@@ -505,6 +513,7 @@ impl SubTask {
             observables: self.observables,
             noise_model: self.noise_model,
             security_level: self.security_level,
+            sv_leaf_rows: (self.sv_leaf_rows > 0).then_some(self.sv_leaf_rows),
         }
     }
 }
@@ -985,5 +994,58 @@ mod tests {
         let body = serde_json::to_value(sub.into_compute_request("peer")).expect("request");
         assert_eq!(body["contraction_tree"]["nodes"][0]["left"]["control"], 0);
         assert_eq!(body["contraction_tree"]["nodes"][0]["right"]["target"], 0);
+    }
+
+    /// The orchestrator's `TestSerializeDispatchPayloadAppendsSvLeafRowsOnlyWhenSet`.
+    #[test]
+    fn serialize_dispatch_payload_appends_sv_leaf_rows_only_when_set() {
+        let base = SubTask {
+            task_id: "s".into(),
+            parent_task_id: "p".into(),
+            circuit_id: "c".into(),
+            qubit_count: 2,
+            original_qubit_count: 2,
+            slice_id: "0".into(),
+            circuit: vec![
+                Gate {
+                    r#type: "H".into(),
+                    params: serde_json::json!(0),
+                },
+                Gate {
+                    r#type: "MEASURE".into(),
+                    params: serde_json::json!({"qubit": 0, "cbit": 0}),
+                },
+            ],
+            required_votes: 1,
+            output_mode: "sample_counts".into(),
+            shots: 64,
+            classical_bit_count: 1,
+            ..Default::default()
+        };
+        let plain = serialize_dispatch_payload(&base).expect("plain");
+        let v2 = SubTask {
+            sv_leaf_rows: 1 << 20,
+            ..base
+        };
+        let signed = serialize_dispatch_payload(&v2).expect("v2");
+        let mut want = plain.clone();
+        want.extend_from_slice(&[0, 0, 0, 0, 0, 0x10, 0, 0]);
+        assert_eq!(signed, want);
+
+        let req = v2.into_compute_request("peer");
+        assert_eq!(req.sv_leaf_rows, Some(1 << 20));
+        let body = serde_json::to_value(&req).expect("request");
+        assert_eq!(body["sv_leaf_rows"], 1 << 20);
+    }
+
+    #[test]
+    fn a_v1_dispatch_forwards_no_sv_leaf_rows() {
+        let sub: SubTask = serde_json::from_str(
+            r#"{"task_id":"s","parent_task_id":"p","circuit_id":"c","qubit_count":2,"original_qubit_count":2,"slice_id":"0","required_votes":1}"#,
+        )
+        .expect("bare");
+        assert_eq!(sub.sv_leaf_rows, 0);
+        let body = serde_json::to_value(sub.into_compute_request("peer")).expect("request");
+        assert!(body.get("sv_leaf_rows").is_none());
     }
 }

@@ -25,6 +25,10 @@ pub struct Bid {
     /// appending a field would reject bids from nodes that do not send it.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub max_mps_qubits: u32,
+    /// Largest v2 leaf, in gate rows, this node proves. Omitted when 0; unsigned like
+    /// `max_mps_qubits`.
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub sv_max_rows: u64,
     pub current_load_factors: u32,
     pub timestamp: i64,
     pub lottery_attempt: u64,
@@ -93,6 +97,7 @@ pub fn build_signed_bid(
         // The JSON field is u32. max_qubits_from_mps_memory_budget already
         // stops at this cap; a larger configured width uses the same ceiling.
         max_mps_qubits: u32::try_from(config.max_mps_qubits).unwrap_or(u32::MAX),
+        sv_max_rows: config.sv_max_rows,
         current_load_factors: current_load,
         timestamp,
         lottery_attempt,
@@ -130,7 +135,7 @@ pub fn serialize_bid_payload(bid: &Bid) -> Vec<u8> {
     let mut payload = Vec::new();
     payload.extend_from_slice(bid.task_id.as_bytes());
     payload.extend_from_slice(bid.node_id.as_bytes());
-    // max_mps_qubits stays out of this buffer. See the field comment on Bid.
+    // max_mps_qubits and sv_max_rows stay out of this buffer. See the field comment on Bid.
     payload.extend_from_slice(&bid.max_qubit_capability.to_be_bytes());
     payload.extend_from_slice(&bid.current_load_factors.to_be_bytes());
     payload.extend_from_slice(&bid.timestamp.to_be_bytes());
@@ -192,6 +197,10 @@ fn is_zero_u32(value: &u32) -> bool {
     *value == 0
 }
 
+fn is_zero_u64(value: &u64) -> bool {
+    *value == 0
+}
+
 fn serialize_bytes_as_base64<S>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
@@ -240,6 +249,7 @@ mod tests {
             vram_budget_gib: None,
             compute_timeout_secs: 300,
             tn_rates: None,
+            sv_max_rows: 0,
             work_budget_margin: 0.5,
             work_overhead_secs: 5.0,
             work_unknown_secs: 30.0,
@@ -321,6 +331,8 @@ mod tests {
             node_id: "node-b".to_string(),
             max_qubit_capability: 25,
             max_mps_qubits: 2048,
+            // Unsigned, like max_mps_qubits: the expected payload below has neither.
+            sv_max_rows: 1 << 22,
             current_load_factors: 1,
             timestamp: 1_717_776_000,
             lottery_attempt: 7,
@@ -345,6 +357,15 @@ mod tests {
         expected.extend_from_slice(&[0xAA, 0xBB]);
         expected.extend_from_slice(&supported.to_be_bytes());
         assert_eq!(payload, expected);
+
+        let json = serde_json::to_value(&bid).expect("bid JSON");
+        assert_eq!(json["sv_max_rows"], 1 << 22);
+        let without = Bid {
+            sv_max_rows: 0,
+            ..bid
+        };
+        let json = serde_json::to_value(&without).expect("bid JSON");
+        assert!(json.get("sv_max_rows").is_none());
     }
 
     #[test]

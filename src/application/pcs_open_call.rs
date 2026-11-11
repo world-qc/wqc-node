@@ -121,6 +121,7 @@ mod tests {
             vram_budget_gib: None,
             compute_timeout_secs: 300,
             tn_rates: None,
+            sv_max_rows: 0,
             work_budget_margin: 0.5,
             work_overhead_secs: 5.0,
             work_unknown_secs: 30.0,

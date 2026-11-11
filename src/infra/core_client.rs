@@ -231,6 +231,7 @@ impl WqcCoreClient {
                 output_result_hash: String::new(),
                 measurement_spec_hash: String::new(),
                 security_level: String::new(),
+                sv_digest: Vec::new(),
             },
             stark_proof_b64: STANDARD.encode(proof_bytes),
         };

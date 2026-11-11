@@ -59,6 +59,9 @@ pub struct ComputeRequest {
     /// Orchestrator security tier (`low|normal|high|ultra`); empty → FRI default.
     #[serde(default)]
     pub security_level: String,
+    /// Gate rows of a v2 (sv-stark) leaf; core proves v2 when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sv_leaf_rows: Option<u64>,
 }
 
 /// Exact scalar tree. Field order matches the orchestrator's signed JSON.
@@ -149,6 +152,10 @@ pub struct PublicInputs {
     pub measurement_spec_hash: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub security_level: String,
+    /// A v2 leaf's terminal-state digest (4 Goldilocks words). Kept through the node's
+    /// re-encoding: the orchestrator verifies the v2 proof against it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sv_digest: Vec<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -260,6 +267,13 @@ pub struct CoreSystemInfo {
     pub tn_seconds_per_byte: Option<f64>,
     #[serde(default)]
     pub tn_seconds_per_flop: Option<f64>,
+    /// v2 leaf proving rate and memory estimate; absent when core does not prove v2.
+    #[serde(default)]
+    pub sv_seconds_per_row: Option<f64>,
+    #[serde(default)]
+    pub sv_bytes_per_row: Option<u64>,
+    #[serde(default)]
+    pub sv_base_bytes: Option<u64>,
 }
 
 fn default_pcs_memory_policy() -> String {
@@ -293,5 +307,20 @@ mod tests {
     fn work_report_emits_nonempty_proof_scope() {
         let json = serde_json::to_string(&sample_report("mps_time_split")).expect("ser");
         assert!(json.contains(r#""proof_scope":"mps_time_split""#), "{json}");
+    }
+
+    #[test]
+    fn proof_keeps_the_v2_digest_and_omits_an_empty_one() {
+        let core = r#"{"public_inputs":{"circuit_id":"c","sub_task_id":"s","node_id":"n","slice_id":"0","output_result_hash":"h","security_level":"low","sv_digest":[1,2,3,18446744069414584320]},"stark_proof_b64":"AA=="}"#;
+        let proof: super::Proof = serde_json::from_str(core).expect("v2 proof");
+        assert_eq!(
+            proof.public_inputs.sv_digest,
+            [1, 2, 3, 18446744069414584320]
+        );
+        assert_eq!(serde_json::to_string(&proof).expect("ser"), core);
+
+        let v1 = r#"{"public_inputs":{"circuit_id":"c","sub_task_id":"s","node_id":"n","slice_id":"0","output_result_hash":"h"},"stark_proof_b64":"AA=="}"#;
+        let proof: super::Proof = serde_json::from_str(v1).expect("v1 proof");
+        assert_eq!(serde_json::to_string(&proof).expect("ser"), v1);
     }
 }

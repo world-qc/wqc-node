@@ -36,8 +36,11 @@ impl BidClient {
         announcement: TaskAnnouncement,
         orchestrator_peer_id: PeerId,
     ) -> anyhow::Result<()> {
-        let supported_features =
-            features::node_features(&self.state.supported_gates, self.config.tn_rates.is_some());
+        let supported_features = features::node_features(
+            &self.state.supported_gates,
+            self.config.tn_rates.is_some(),
+            self.config.sv_max_rows > 0,
+        );
         if !bid::should_bid_on(&announcement, &self.config, supported_features) {
             tracing::debug!(
                 "[P2P Bid] Skipping task_id={} (capability/feature mismatch, supported_features=0x{:x})",
