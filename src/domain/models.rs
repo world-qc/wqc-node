@@ -274,6 +274,10 @@ pub struct CoreSystemInfo {
     pub sv_bytes_per_row: Option<u64>,
     #[serde(default)]
     pub sv_base_bytes: Option<u64>,
+    /// Core also proves mid-circuit circuits as v2 leaves (`wire::parse_leaf`); absent on an
+    /// older core.
+    #[serde(default)]
+    pub sv_dynamic: Option<bool>,
 }
 
 fn default_pcs_memory_policy() -> String {
