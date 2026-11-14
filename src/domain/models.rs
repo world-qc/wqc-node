@@ -162,6 +162,11 @@ pub struct PublicInputs {
 pub struct Proof {
     pub public_inputs: PublicInputs,
     pub stark_proof_b64: String,
+    /// A v2 unitary leaf's final state, base64, as core returns it. Kept through the node's
+    /// re-encoding: the orchestrator checks it against `sv_digest` and computes the
+    /// `statevector_scalar` or `expectation` result from it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub sv_state_b64: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -278,6 +283,9 @@ pub struct CoreSystemInfo {
     /// older core.
     #[serde(default)]
     pub sv_dynamic: Option<bool>,
+    /// Core proves `statevector_scalar` and `expectation` as v2 leaves with a published state.
+    #[serde(default)]
+    pub sv_state_outputs: Option<bool>,
 }
 
 fn default_pcs_memory_policy() -> String {
@@ -326,5 +334,11 @@ mod tests {
         let v1 = r#"{"public_inputs":{"circuit_id":"c","sub_task_id":"s","node_id":"n","slice_id":"0","output_result_hash":"h"},"stark_proof_b64":"AA=="}"#;
         let proof: super::Proof = serde_json::from_str(v1).expect("v1 proof");
         assert_eq!(serde_json::to_string(&proof).expect("ser"), v1);
+
+        // A unitary v2 leaf's published state passes through unchanged.
+        let scalar = r#"{"public_inputs":{"circuit_id":"c","sub_task_id":"s","node_id":"n","slice_id":"0","output_result_hash":"h","sv_digest":[1,2,3,4]},"stark_proof_b64":"AA==","sv_state_b64":"AAAAAAAAAAA="}"#;
+        let proof: super::Proof = serde_json::from_str(scalar).expect("v2 scalar proof");
+        assert_eq!(proof.sv_state_b64, "AAAAAAAAAAA=");
+        assert_eq!(serde_json::to_string(&proof).expect("ser"), scalar);
     }
 }

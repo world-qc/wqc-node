@@ -66,6 +66,7 @@ fn placeholder_proof(sub_task_id: &str, node_id: &str, slice_id: &str) -> Proof 
             sv_digest: Vec::new(),
         },
         stark_proof_b64: String::new(),
+        sv_state_b64: String::new(),
     }
 }
 
