@@ -234,6 +234,7 @@ impl WqcCoreClient {
                 sv_digest: Vec::new(),
             },
             stark_proof_b64: STANDARD.encode(proof_bytes),
+            sv_state_b64: String::new(),
         };
         self.build_leaf_pcs(proof).await
     }

@@ -47,6 +47,9 @@ pub struct NodeConfig {
     /// Core proves mid-circuit circuits as v2 leaves too (`sv_dynamic` in `/sysinfo`), and
     /// this node proves v2 leaves at all: it advertises capability bit 6.
     pub sv_dynamic: bool,
+    /// Core proves `statevector_scalar` and `expectation` as v2 leaves too and publishes their
+    /// state (`sv_state_outputs` in `/sysinfo`): the node advertises capability bit 7.
+    pub sv_state_outputs: bool,
     /// Share of `min(deadline, compute timeout)` an estimate may use
     /// (`WQC_WORK_BUDGET_MARGIN`, default 0.5).
     pub work_budget_margin: f64,
@@ -211,6 +214,7 @@ impl NodeConfig {
             tn_rates: None,
             sv_max_rows: 0,
             sv_dynamic: false,
+            sv_state_outputs: false,
             work_budget_margin,
             work_overhead_secs,
             work_unknown_secs,
@@ -256,6 +260,10 @@ impl NodeConfig {
         self.sv_dynamic = self.sv_max_rows > 0 && info.sv_dynamic == Some(true);
         if self.sv_dynamic {
             tracing::info!("Core proves mid-circuit v2 leaves; advertising them");
+        }
+        self.sv_state_outputs = self.sv_max_rows > 0 && info.sv_state_outputs == Some(true);
+        if self.sv_state_outputs {
+            tracing::info!("Core proves scalar and expectation v2 leaves; advertising them");
         }
         match sv_rates {
             Some(r) if self.sv_max_rows > 0 => tracing::info!(
