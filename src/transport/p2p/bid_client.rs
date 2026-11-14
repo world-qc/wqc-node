@@ -40,6 +40,7 @@ impl BidClient {
             &self.state.supported_gates,
             self.config.tn_rates.is_some(),
             self.config.sv_max_rows > 0,
+            self.config.sv_dynamic,
         );
         if !bid::should_bid_on(&announcement, &self.config, supported_features) {
             tracing::debug!(

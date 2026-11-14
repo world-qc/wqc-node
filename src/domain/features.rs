@@ -11,6 +11,10 @@ pub const FEATURE_WORK_BUDGET: u32 = 1 << 4;
 /// This node proves v2 (sv-stark) leaves up to its bid's `sv_max_rows`. Set when that is
 /// nonzero.
 pub const FEATURE_SV_STARK_V2: u32 = 1 << 5;
+/// This node also proves mid-circuit circuits (RESET, IF, a gate after a MEASURE) as v2
+/// leaves, rewritten by `wqc_sv_stark::wire::parse_leaf`. Set with [`FEATURE_SV_STARK_V2`]
+/// when core reports `sv_dynamic`.
+pub const FEATURE_SV_STARK_DYNAMIC: u32 = 1 << 6;
 
 /// Maps gate names (from `GET /gates`) to the orchestrator feature bitmask.
 pub fn features_from_gates(gates: &[String]) -> u32 {
@@ -37,14 +41,23 @@ fn apply_gate_feature(features: &mut u32, gate: &str) {
 }
 
 /// This node's bid mask: the gate features, plus [`FEATURE_WORK_BUDGET`] when
-/// it can judge work and [`FEATURE_SV_STARK_V2`] when it proves v2 leaves.
-pub fn node_features(gates: &[String], judges_work: bool, proves_sv: bool) -> u32 {
+/// it can judge work, [`FEATURE_SV_STARK_V2`] when it proves v2 leaves, and
+/// [`FEATURE_SV_STARK_DYNAMIC`] when those include mid-circuit circuits.
+pub fn node_features(
+    gates: &[String],
+    judges_work: bool,
+    proves_sv: bool,
+    proves_sv_dynamic: bool,
+) -> u32 {
     let mut features = features_from_gates(gates);
     if judges_work {
         features |= FEATURE_WORK_BUDGET;
     }
     if proves_sv {
         features |= FEATURE_SV_STARK_V2;
+        if proves_sv_dynamic {
+            features |= FEATURE_SV_STARK_DYNAMIC;
+        }
     }
     features
 }
@@ -76,9 +89,12 @@ mod tests {
     #[test]
     fn work_budget_bit_follows_core_rates() {
         let gates = vec!["H".into()];
-        assert_eq!(node_features(&gates, false, false), FEATURE_STANDARD_GATES);
         assert_eq!(
-            node_features(&gates, true, false),
+            node_features(&gates, false, false, false),
+            FEATURE_STANDARD_GATES
+        );
+        assert_eq!(
+            node_features(&gates, true, false, false),
             FEATURE_STANDARD_GATES | FEATURE_WORK_BUDGET
         );
     }
@@ -87,10 +103,24 @@ mod tests {
     fn sv_stark_bit_follows_sv_max_rows() {
         let gates = vec!["H".into()];
         assert_eq!(
-            node_features(&gates, false, true),
+            node_features(&gates, false, true, false),
             FEATURE_STANDARD_GATES | FEATURE_SV_STARK_V2
         );
         assert_eq!(FEATURE_SV_STARK_V2, 1 << 5);
+    }
+
+    #[test]
+    fn sv_dynamic_bit_needs_the_v2_bit() {
+        let gates = vec!["H".into()];
+        assert_eq!(
+            node_features(&gates, false, true, true),
+            FEATURE_STANDARD_GATES | FEATURE_SV_STARK_V2 | FEATURE_SV_STARK_DYNAMIC
+        );
+        assert_eq!(
+            node_features(&gates, false, false, true),
+            FEATURE_STANDARD_GATES
+        );
+        assert_eq!(FEATURE_SV_STARK_DYNAMIC, 1 << 6);
     }
 
     #[test]

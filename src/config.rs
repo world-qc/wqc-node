@@ -44,6 +44,9 @@ pub struct NodeConfig {
     /// Largest v2 leaf, in gate rows, this node proves (`domain::sv::sv_max_rows` from core's
     /// `/sysinfo`); 0 for none. Advertised in bids with capability bit 5.
     pub sv_max_rows: u64,
+    /// Core proves mid-circuit circuits as v2 leaves too (`sv_dynamic` in `/sysinfo`), and
+    /// this node proves v2 leaves at all: it advertises capability bit 6.
+    pub sv_dynamic: bool,
     /// Share of `min(deadline, compute timeout)` an estimate may use
     /// (`WQC_WORK_BUDGET_MARGIN`, default 0.5).
     pub work_budget_margin: f64,
@@ -207,6 +210,7 @@ impl NodeConfig {
             compute_timeout_secs,
             tn_rates: None,
             sv_max_rows: 0,
+            sv_dynamic: false,
             work_budget_margin,
             work_overhead_secs,
             work_unknown_secs,
@@ -249,6 +253,10 @@ impl NodeConfig {
             info.sv_base_bytes,
         );
         self.sv_max_rows = sv_max_rows(sv_rates, ram_bytes, self.compute_timeout_secs);
+        self.sv_dynamic = self.sv_max_rows > 0 && info.sv_dynamic == Some(true);
+        if self.sv_dynamic {
+            tracing::info!("Core proves mid-circuit v2 leaves; advertising them");
+        }
         match sv_rates {
             Some(r) if self.sv_max_rows > 0 => tracing::info!(
                 "Core proves v2 leaves at {:.0} µs per gate row; advertising sv_max_rows = {}",
