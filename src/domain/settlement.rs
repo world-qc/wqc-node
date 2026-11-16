@@ -77,12 +77,40 @@ struct Receipt {
     escrow_refunded_pwqc: String,
     #[serde(default)]
     payees: Vec<Payee>,
+    /// Operators rewarded but without a payout binding at finalize: refunded, not paid.
+    #[serde(default)]
+    unbound_payees: Vec<Payee>,
 }
 
 #[derive(Debug, Deserialize)]
 struct Payee {
     operator_id: String,
     amount_pwqc: String,
+    /// The payout binding fixed at finalize; absent in receipts from before.
+    #[serde(default)]
+    payout_address: String,
+    #[serde(default)]
+    chain_id: u64,
+    #[serde(default)]
+    nonce: u64,
+    #[serde(default)]
+    operator_pubkey_b64: String,
+    #[serde(default)]
+    signature_b64: String,
+}
+
+impl Payee {
+    fn binding(&self) -> Option<Binding> {
+        (!self.payout_address.is_empty()).then(|| Binding {
+            operator_id: self.operator_id.clone(),
+            chain_id: self.chain_id,
+            payout_address: self.payout_address.clone(),
+            nonce: self.nonce,
+            status: String::new(),
+            operator_pubkey_b64: self.operator_pubkey_b64.clone(),
+            signature_b64: self.signature_b64.clone(),
+        })
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -97,10 +125,15 @@ struct LeafRef {
     digest: [u64; 4],
 }
 
-/// The operator ids the receipt pays, so the caller can fetch their bindings.
-pub fn receipt_payees(receipt: &[u8]) -> Result<Vec<String>, String> {
+/// The payees whose binding the receipt does not carry (receipts from before bindings were
+/// fixed at finalize), so the caller can fetch theirs from the registry.
+pub fn payees_without_binding(receipt: &[u8]) -> Result<Vec<String>, String> {
     let r: Receipt = serde_json::from_slice(receipt).map_err(|e| format!("receipt JSON: {e}"))?;
-    Ok(r.payees.into_iter().map(|p| p.operator_id).collect())
+    Ok(r.payees
+        .into_iter()
+        .filter(|p| p.payout_address.is_empty())
+        .map(|p| p.operator_id)
+        .collect())
 }
 
 /// Checks the settled task against the evidence: `wrap_digest` is the digest recomputed from
@@ -221,11 +254,14 @@ pub fn check(
             ));
         }
     }
-    if own_in_root && !receipt.payees.is_empty() {
+    // An operator without a payout binding at finalize is listed as unbound (its reward went
+    // back to the client), not left out.
+    if own_in_root && !(receipt.payees.is_empty() && receipt.unbound_payees.is_empty()) {
         if let Some(op) = own_operator {
-            if !receipt.payees.iter().any(|p| p.operator_id == op) {
+            let listed = |ps: &[Payee]| ps.iter().any(|p| p.operator_id == op);
+            if !listed(&receipt.payees) && !listed(&receipt.unbound_payees) {
                 failed.push(format!(
-                    "operator {op} proved a leaf of the root but is not a payee"
+                    "operator {op} proved a leaf of the root but is neither a payee nor unbound"
                 ));
             }
         }
@@ -251,9 +287,13 @@ fn payouts_hash(
 ) -> Result<[u8; 32], String> {
     let mut by_address: BTreeMap<String, U256> = BTreeMap::new();
     for p in payees {
-        let b = bindings
-            .get(&p.operator_id)
-            .ok_or_else(|| format!("payee {}: no payout binding", p.operator_id))?;
+        let carried = p.binding();
+        let b = match carried.as_ref() {
+            Some(b) => b,
+            None => bindings
+                .get(&p.operator_id)
+                .ok_or_else(|| format!("payee {}: no payout binding", p.operator_id))?,
+        };
         verify_binding(b, &p.operator_id, chain_id)?;
         let amount = U256::from_str_radix(&p.amount_pwqc, 10)
             .map_err(|e| format!("payee {} amount {:?}: {e}", p.operator_id, p.amount_pwqc))?;
@@ -468,10 +508,85 @@ mod tests {
     }
 
     #[test]
-    fn receipt_payees_lists_the_operators() {
+    fn payees_without_binding_lists_the_operators_to_fetch() {
         let f = fixture();
-        let payees = receipt_payees(&f.receipt).unwrap();
+        let payees = payees_without_binding(&f.receipt).unwrap();
         assert_eq!(payees.len(), 2);
         assert!(payees.contains(&f.me));
+        let carried = with_carried_bindings(&f);
+        assert!(payees_without_binding(&carried).unwrap().is_empty());
+    }
+
+    /// The fixture's receipt with each payee's binding carried in it (as fixed at finalize).
+    fn with_carried_bindings(f: &Fixture) -> Vec<u8> {
+        let mut r: serde_json::Value = serde_json::from_slice(&f.receipt).unwrap();
+        for p in r["payees"].as_array_mut().unwrap() {
+            let b = &f.bindings[p["operator_id"].as_str().unwrap()];
+            p["payout_address"] = b.payout_address.clone().into();
+            p["chain_id"] = b.chain_id.into();
+            p["nonce"] = b.nonce.into();
+            p["operator_pubkey_b64"] = b.operator_pubkey_b64.clone().into();
+            p["signature_b64"] = b.signature_b64.clone().into();
+        }
+        serde_json::to_vec(&r).unwrap()
+    }
+
+    /// An operator without a binding at finalize is listed as unbound: not a mismatch for it.
+    #[test]
+    fn an_unbound_operator_is_not_a_mismatch() {
+        let mut f = fixture();
+        let mut r: serde_json::Value = serde_json::from_slice(&with_carried_bindings(&f)).unwrap();
+        let payees = r["payees"].as_array_mut().unwrap();
+        let i = payees
+            .iter()
+            .position(|p| p["operator_id"] == f.me.as_str())
+            .unwrap();
+        let mine = payees.remove(i);
+        r["unbound_payees"] = serde_json::json!([{
+            "operator_id": mine["operator_id"], "amount_pwqc": mine["amount_pwqc"],
+        }]);
+        f.receipt = serde_json::to_vec(&r).unwrap();
+        f.task.receipt_hash = Sha3_256::digest(&f.receipt).into();
+        // Only the other operator is paid now.
+        let other = r["payees"][0].clone();
+        let to: Address = other["payout_address"].as_str().unwrap().parse().unwrap();
+        let amount = U256::from_str_radix(other["amount_pwqc"].as_str().unwrap(), 10).unwrap();
+        f.task.payouts_hash = keccak256(vec![Payout { to, amount }].abi_encode()).0;
+        assert_eq!(run(&f, None), Vec::<String>::new());
+
+        // Left out altogether, it is a mismatch.
+        r.as_object_mut().unwrap().remove("unbound_payees");
+        f.receipt = serde_json::to_vec(&r).unwrap();
+        f.task.receipt_hash = Sha3_256::digest(&f.receipt).into();
+        let failed = run(&f, None);
+        assert!(
+            failed
+                .iter()
+                .any(|e| e.contains("neither a payee nor unbound")),
+            "{failed:?}"
+        );
+    }
+
+    /// Bindings carried in the receipt are checked as they are; the registry's current ones
+    /// (a later rotation) play no part.
+    #[test]
+    fn carried_bindings_ignore_the_registry() {
+        let mut f = fixture();
+        f.receipt = with_carried_bindings(&f);
+        f.task.receipt_hash = Sha3_256::digest(&f.receipt).into();
+        // The registry now points elsewhere (the operator rotated after finalize).
+        let me = f.me.clone();
+        f.bindings.get_mut(&me).unwrap().payout_address =
+            "0x00000000000000000000000000000000000000bb".into();
+        assert_eq!(run(&f, None), Vec::<String>::new());
+        f.bindings.clear();
+        assert_eq!(run(&f, None), Vec::<String>::new());
+
+        // A carried binding that was tampered with (address not what the operator signed) fails.
+        let mut r: serde_json::Value = serde_json::from_slice(&f.receipt).unwrap();
+        r["payees"][0]["payout_address"] = "0x00000000000000000000000000000000000000cc".into();
+        f.receipt = serde_json::to_vec(&r).unwrap();
+        f.task.receipt_hash = Sha3_256::digest(&f.receipt).into();
+        assert!(!run(&f, None).is_empty());
     }
 }
