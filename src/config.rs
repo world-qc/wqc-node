@@ -101,7 +101,8 @@ pub struct ChallengerConfig {
     /// Poll interval (`WQC_CHALLENGER_POLL_SECS`, default 5).
     pub poll_secs: u64,
     /// Unavailable evidence is challenged once the window has less than this left
-    /// (`WQC_CHALLENGER_MARGIN_SECS`, default 30).
+    /// (`WQC_CHALLENGER_MARGIN_SECS`, default 120: recomputing the wrap digest alone took about
+    /// a minute on a busy 4-vCPU devnet).
     pub margin_secs: u64,
 }
 
@@ -145,7 +146,7 @@ impl ChallengerConfig {
                 .to_string(),
             private_key,
             poll_secs: number("WQC_CHALLENGER_POLL_SECS", 5)?.max(1),
-            margin_secs: number("WQC_CHALLENGER_MARGIN_SECS", 30)?,
+            margin_secs: number("WQC_CHALLENGER_MARGIN_SECS", 120)?,
         }))
     }
 }

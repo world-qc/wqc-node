@@ -40,29 +40,23 @@ pub async fn fetch(
     chain_id: u64,
 ) -> anyhow::Result<FetchedEvidence> {
     let base = orch_url.trim_end_matches('/');
-    let task: TaskResponse = client
-        .get(format!("{base}/api/v1/task/{task_id}"))
-        .send()
-        .await?
-        .error_for_status()?
-        .json()
-        .await
-        .context("task response")?;
+    let task: TaskResponse =
+        serde_json::from_slice(&get(client, &format!("{base}/api/v1/task/{task_id}")).await?)
+            .context("task response")?;
     anyhow::ensure!(!task.receipt_url.is_empty(), "no receipt_url");
     let ev = task.wrap_evidence.context("no wrap_evidence")?;
     let receipt = get(client, &task.receipt_url).await.context("receipt")?;
     let mut bindings = BTreeMap::new();
     for op in settlement::receipt_payees(&receipt).map_err(anyhow::Error::msg)? {
-        let b: Binding = client
-            .get(format!(
-                "{base}/api/v1/economy/payout/{op}?chain_id={chain_id}"
-            ))
-            .send()
-            .await?
-            .error_for_status()
-            .with_context(|| format!("payout binding of {op}"))?
-            .json()
-            .await?;
+        let b: Binding = serde_json::from_slice(
+            &get(
+                client,
+                &format!("{base}/api/v1/economy/payout/{op}?chain_id={chain_id}"),
+            )
+            .await
+            .with_context(|| format!("payout binding of {op}"))?,
+        )
+        .with_context(|| format!("payout binding of {op}"))?;
         bindings.insert(op, b);
     }
     Ok(FetchedEvidence {
@@ -74,13 +68,24 @@ pub async fn fetch(
     })
 }
 
+/// The largest evidence document read (the leaves JSON carries every leaf proof).
+const MAX_EVIDENCE_BYTES: usize = 256 << 20;
+
 async fn get(client: &Client, url: &str) -> anyhow::Result<Vec<u8>> {
-    Ok(client
-        .get(url)
-        .send()
-        .await?
-        .error_for_status()?
-        .bytes()
-        .await?
-        .to_vec())
+    let mut resp = client.get(url).send().await?.error_for_status()?;
+    if resp
+        .content_length()
+        .is_some_and(|n| n > MAX_EVIDENCE_BYTES as u64)
+    {
+        anyhow::bail!("larger than {MAX_EVIDENCE_BYTES} bytes");
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = resp.chunk().await? {
+        anyhow::ensure!(
+            body.len() + chunk.len() <= MAX_EVIDENCE_BYTES,
+            "larger than {MAX_EVIDENCE_BYTES} bytes"
+        );
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
 }

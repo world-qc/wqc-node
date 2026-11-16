@@ -133,15 +133,18 @@ pub fn check(
         }
     };
 
-    // 2. payouts from the payees' signed bindings, burn and refund.
-    match payouts_hash(&receipt.payees, ev.bindings, chain_id) {
-        Ok(h) if h != task.payouts_hash => failed.push(format!(
-            "payoutsHash 0x{} is not the receipt's payees at their bindings 0x{}",
-            hex::encode(task.payouts_hash),
-            hex::encode(h)
-        )),
-        Ok(_) => {}
-        Err(e) => failed.push(e),
+    // 2. payouts from the payees' signed bindings, burn and refund. A receipt from before
+    // payees has none: its payouts came from the orchestrator's ledger and are not rebuilt.
+    if !receipt.payees.is_empty() {
+        match payouts_hash(&receipt.payees, ev.bindings, chain_id) {
+            Ok(h) if h != task.payouts_hash => failed.push(format!(
+                "payoutsHash 0x{} is not the receipt's payees at their bindings 0x{}",
+                hex::encode(task.payouts_hash),
+                hex::encode(h)
+            )),
+            Ok(_) => {}
+            Err(e) => failed.push(e),
+        }
     }
     for (name, field, on_chain) in [
         ("burnAmount", &receipt.burn_settled_pwqc, task.burn_amount),
@@ -197,6 +200,16 @@ pub fn check(
         } else if leaves
             .leaves
             .iter()
+            .any(|l| l.sub_task_id == own.sub_task_id && l.node_id == own.node_id)
+        {
+            // This node's leaf, with another result: its work was replaced.
+            failed.push(format!(
+                "leaf of sub-task {} carries this node's id with another digest",
+                own.sub_task_id
+            ));
+        } else if leaves
+            .leaves
+            .iter()
             .any(|l| l.sub_task_id == own.sub_task_id)
         {
             // Another node's leaf for the same sub-task (a quorum peer) is not a mismatch.
@@ -208,7 +221,7 @@ pub fn check(
             ));
         }
     }
-    if own_in_root {
+    if own_in_root && !receipt.payees.is_empty() {
         if let Some(op) = own_operator {
             if !receipt.payees.iter().any(|p| p.operator_id == op) {
                 failed.push(format!(
@@ -429,6 +442,7 @@ mod tests {
                 }),
             ),
             ("missing", Box::new(|f| f.own[0].sub_task_id = "s9".into())),
+            ("replaced", Box::new(|f| f.own[0].sv_digest = [1, 2, 3, 5])),
             ("not a payee", Box::new(|f| f.me = operator(3).0)),
         ];
         for (name, tamper) in cases {
@@ -442,6 +456,14 @@ mod tests {
     fn a_quorum_peers_leaf_is_not_a_mismatch() {
         let mut f = fixture();
         f.own[0].node_id = "peer".into();
+        assert_eq!(run(&f, None), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_receipt_without_payees_skips_the_payouts_check() {
+        let mut f = fixture();
+        f.receipt = br#"{"task_id":"t","burn_settled_pwqc":"20","escrow_refunded_pwqc":"5","receipt_hash":""}"#.to_vec();
+        f.task.receipt_hash = Sha3_256::digest(&f.receipt).into();
         assert_eq!(run(&f, None), Vec::<String>::new());
     }
 

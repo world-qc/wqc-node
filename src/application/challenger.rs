@@ -2,7 +2,7 @@
 //! challenges a settlement that does not match the published evidence (wqc-docs
 //! `spec/zk-SNARK.md` §11.6).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -14,8 +14,14 @@ use crate::infra::settlement_chain::SettlementChain;
 use crate::infra::settlement_evidence;
 use crate::infra::storage::SettleWatch;
 
-/// A task unsettled this long after the leaf is no longer watched.
-const UNSETTLED_TTL_SECS: i64 = 7 * 24 * 3600;
+/// A task with escrow but not settled this long after the leaf is no longer watched.
+const UNSETTLED_TTL_SECS: i64 = 24 * 3600;
+/// How often a task with escrow is asked whether it is settled yet.
+const UNSETTLED_POLL_SECS: i64 = 60;
+/// SettlementV4 status of a task without on-chain escrow: it will never settle there.
+const STATUS_NONE: u8 = 0;
+/// Evidence fetches give up after this long.
+const FETCH_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Records a v2 leaf once its result reached the orchestrator, so its task's settlement gets
 /// checked. `wire_body` is the result as delivered; v1 leaves and failures are skipped.
@@ -80,11 +86,22 @@ pub fn spawn(state: Arc<AppState>, cfg: ChallengerConfig) -> anyhow::Result<()> 
         }
     );
     tokio::spawn(async move {
-        let client = reqwest::Client::new();
+        let client = match reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(FETCH_TIMEOUT)
+            .build()
+        {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::error!("[Challenger] HTTP client: {e:#}");
+                return;
+            }
+        };
+        let mut next_unsettled_check: HashMap<String, i64> = HashMap::new();
         let mut tick = tokio::time::interval(Duration::from_secs(cfg.poll_secs));
         loop {
             tick.tick().await;
-            if let Err(e) = poll(&state, &cfg, &chain, &client).await {
+            if let Err(e) = poll(&state, &cfg, &chain, &client, &mut next_unsettled_check).await {
                 tracing::warn!("[Challenger] poll failed: {e:#}");
             }
         }
@@ -97,6 +114,7 @@ async fn poll(
     cfg: &ChallengerConfig,
     chain: &SettlementChain,
     client: &reqwest::Client,
+    next_unsettled_check: &mut HashMap<String, i64>,
 ) -> anyhow::Result<()> {
     let mut by_task: BTreeMap<String, Vec<SettleWatch>> = BTreeMap::new();
     for w in state.storage.list_settle_watch()? {
@@ -105,13 +123,34 @@ async fn poll(
     if by_task.is_empty() {
         return Ok(());
     }
+    next_unsettled_check.retain(|task_id, _| by_task.contains_key(task_id));
     let now = chain.chain_time().await?;
     for (task_id, watches) in by_task {
-        if let Err(e) = check_task(state, cfg, chain, client, &task_id, &watches, now).await {
-            tracing::warn!("[Challenger] task {task_id}: {e:#}");
+        if next_unsettled_check
+            .get(&task_id)
+            .is_some_and(|&at| unix_now() < at)
+        {
+            continue;
+        }
+        match check_task(state, cfg, chain, client, &task_id, &watches, now).await {
+            Ok(Checked::Unsettled) => {
+                next_unsettled_check.insert(task_id, unix_now() + UNSETTLED_POLL_SECS);
+            }
+            Ok(Checked::Done) => {
+                next_unsettled_check.remove(&task_id);
+            }
+            Err(e) => tracing::warn!("[Challenger] task {task_id}: {e:#}"),
         }
     }
     Ok(())
+}
+
+enum Checked {
+    /// Escrow locked, not settled yet: ask again later.
+    Unsettled,
+    /// Checked, challenged, out of the window, or never to be settled: no longer watched, or
+    /// looked at again on the next poll.
+    Done,
 }
 
 async fn check_task(
@@ -122,22 +161,28 @@ async fn check_task(
     task_id: &str,
     watches: &[SettleWatch],
     chain_now: u64,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Checked> {
     let on_chain = chain.task(task_id).await?;
+    if on_chain.status == STATUS_NONE {
+        // Escrow is locked at submit, before any dispatch: a task without it never settles on
+        // chain (testnet's Redis-only tasks).
+        state.storage.drop_settle_watch(task_id)?;
+        return Ok(Checked::Done);
+    }
     if on_chain.status < STATUS_SETTLED_COMMITTED {
-        // Not settled yet (or never on chain).
         if watches
             .iter()
             .all(|w| unix_now() - w.created_at > UNSETTLED_TTL_SECS)
         {
             state.storage.drop_settle_watch(task_id)?;
+            return Ok(Checked::Done);
         }
-        return Ok(());
+        return Ok(Checked::Unsettled);
     }
     if on_chain.status != STATUS_SETTLED_COMMITTED || chain_now >= on_chain.deadline {
         // Challenged, finalized, reverted, or past the window: nothing left to do.
         state.storage.drop_settle_watch(task_id)?;
-        return Ok(());
+        return Ok(Checked::Done);
     }
 
     let ev = match settlement_evidence::fetch(client, &cfg.orch_url, task_id, cfg.chain_id).await {
@@ -147,28 +192,30 @@ async fn check_task(
                 tracing::warn!(
                     "[Challenger] task {task_id}: evidence unavailable, retrying: {e:#}"
                 );
-                return Ok(());
+                return Ok(Checked::Done);
             }
-            return challenge(
+            challenge(
                 state,
                 chain,
                 task_id,
                 &[format!("evidence unavailable: {e:#}")],
             )
-            .await;
+            .await?;
+            return Ok(Checked::Done);
         }
     };
     // Evidence that does not verify is no evidence: the digest check fails below.
     let wrap_digest = match recompute_wrap_digest(&ev).await {
         Ok(d) => Some(d),
         Err(e) => {
-            return challenge(
+            challenge(
                 state,
                 chain,
                 task_id,
                 &[format!("wrap evidence does not verify: {e:#}")],
             )
-            .await;
+            .await?;
+            return Ok(Checked::Done);
         }
     };
     let own: Vec<OwnLeaf> = watches
@@ -193,11 +240,13 @@ async fn check_task(
         wrap_digest,
     );
     if failed.is_empty() {
+        // Scripts wait for this line: keep its wording.
         tracing::info!("[Challenger] task {task_id}: settlement matches the evidence");
         state.storage.drop_settle_watch(task_id)?;
-        return Ok(());
+        return Ok(Checked::Done);
     }
-    challenge(state, chain, task_id, &failed).await
+    challenge(state, chain, task_id, &failed).await?;
+    Ok(Checked::Done)
 }
 
 async fn challenge(
