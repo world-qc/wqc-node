@@ -77,6 +77,9 @@ struct Receipt {
     escrow_refunded_pwqc: String,
     #[serde(default)]
     payees: Vec<Payee>,
+    /// Operators rewarded but without a payout binding at finalize: refunded, not paid.
+    #[serde(default)]
+    unbound_payees: Vec<Payee>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -251,11 +254,14 @@ pub fn check(
             ));
         }
     }
-    if own_in_root && !receipt.payees.is_empty() {
+    // An operator without a payout binding at finalize is listed as unbound (its reward went
+    // back to the client), not left out.
+    if own_in_root && !(receipt.payees.is_empty() && receipt.unbound_payees.is_empty()) {
         if let Some(op) = own_operator {
-            if !receipt.payees.iter().any(|p| p.operator_id == op) {
+            let listed = |ps: &[Payee]| ps.iter().any(|p| p.operator_id == op);
+            if !listed(&receipt.payees) && !listed(&receipt.unbound_payees) {
                 failed.push(format!(
-                    "operator {op} proved a leaf of the root but is not a payee"
+                    "operator {op} proved a leaf of the root but is neither a payee nor unbound"
                 ));
             }
         }
@@ -523,6 +529,42 @@ mod tests {
             p["signature_b64"] = b.signature_b64.clone().into();
         }
         serde_json::to_vec(&r).unwrap()
+    }
+
+    /// An operator without a binding at finalize is listed as unbound: not a mismatch for it.
+    #[test]
+    fn an_unbound_operator_is_not_a_mismatch() {
+        let mut f = fixture();
+        let mut r: serde_json::Value = serde_json::from_slice(&with_carried_bindings(&f)).unwrap();
+        let payees = r["payees"].as_array_mut().unwrap();
+        let i = payees
+            .iter()
+            .position(|p| p["operator_id"] == f.me.as_str())
+            .unwrap();
+        let mine = payees.remove(i);
+        r["unbound_payees"] = serde_json::json!([{
+            "operator_id": mine["operator_id"], "amount_pwqc": mine["amount_pwqc"],
+        }]);
+        f.receipt = serde_json::to_vec(&r).unwrap();
+        f.task.receipt_hash = Sha3_256::digest(&f.receipt).into();
+        // Only the other operator is paid now.
+        let other = r["payees"][0].clone();
+        let to: Address = other["payout_address"].as_str().unwrap().parse().unwrap();
+        let amount = U256::from_str_radix(other["amount_pwqc"].as_str().unwrap(), 10).unwrap();
+        f.task.payouts_hash = keccak256(vec![Payout { to, amount }].abi_encode()).0;
+        assert_eq!(run(&f, None), Vec::<String>::new());
+
+        // Left out altogether, it is a mismatch.
+        r.as_object_mut().unwrap().remove("unbound_payees");
+        f.receipt = serde_json::to_vec(&r).unwrap();
+        f.task.receipt_hash = Sha3_256::digest(&f.receipt).into();
+        let failed = run(&f, None);
+        assert!(
+            failed
+                .iter()
+                .any(|e| e.contains("neither a payee nor unbound")),
+            "{failed:?}"
+        );
     }
 
     /// Bindings carried in the receipt are checked as they are; the registry's current ones
