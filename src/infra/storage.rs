@@ -22,6 +22,16 @@ pub struct PendingPcs {
     pub created_at: i64,
 }
 
+/// A v2 leaf this node delivered, kept until its task's on-chain settlement is checked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SettleWatch {
+    pub parent_task_id: String,
+    pub sub_task_id: String,
+    pub node_id: String,
+    pub sv_digest: [u64; 4],
+    pub created_at: i64,
+}
+
 pub struct Storage {
     conn: Arc<Mutex<Connection>>,
 }
@@ -78,6 +88,18 @@ impl Storage {
                 country TEXT NOT NULL,
                 city TEXT NOT NULL,
                 updated_at INTEGER NOT NULL
+            )",
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS settle_watch (
+                parent_task_id TEXT NOT NULL,
+                sub_task_id TEXT NOT NULL,
+                node_id TEXT NOT NULL,
+                sv_digest TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                PRIMARY KEY(parent_task_id, sub_task_id)
             )",
             [],
         )?;
@@ -197,6 +219,64 @@ impl Storage {
             }
         }
         Ok((pending, completed, failed))
+    }
+
+    pub fn add_settle_watch(&self, w: &SettleWatch) -> anyhow::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR IGNORE INTO settle_watch (parent_task_id, sub_task_id, node_id, sv_digest, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                w.parent_task_id,
+                w.sub_task_id,
+                w.node_id,
+                serde_json::to_string(&w.sv_digest)?,
+                w.created_at
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_settle_watch(&self) -> anyhow::Result<Vec<SettleWatch>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT parent_task_id, sub_task_id, node_id, sv_digest, created_at
+             FROM settle_watch ORDER BY created_at ASC",
+        )?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, i64>(4)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows.into_iter()
+            .map(
+                |(parent_task_id, sub_task_id, node_id, digest, created_at)| {
+                    Ok(SettleWatch {
+                        parent_task_id,
+                        sub_task_id,
+                        node_id,
+                        sv_digest: serde_json::from_str(&digest)?,
+                        created_at,
+                    })
+                },
+            )
+            .collect()
+    }
+
+    /// Stops watching a task (checked, challenged, or past its window).
+    pub fn drop_settle_watch(&self, parent_task_id: &str) -> anyhow::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM settle_watch WHERE parent_task_id = ?1",
+            params![parent_task_id],
+        )?;
+        Ok(())
     }
 
     pub fn upsert_pending_result(
@@ -640,5 +720,34 @@ mod tests {
             .unwrap();
 
         assert_eq!(storage.count_tasks_by_status().unwrap(), (1, 1, 1));
+    }
+
+    #[test]
+    fn settle_watch_round_trips_and_drops_by_task() {
+        let storage = Storage::new(":memory:").unwrap();
+        let w = SettleWatch {
+            parent_task_id: "p1".into(),
+            sub_task_id: "s1".into(),
+            node_id: "n".into(),
+            sv_digest: [1, 2, 3, u64::MAX],
+            created_at: 5,
+        };
+        storage.add_settle_watch(&w).unwrap();
+        storage.add_settle_watch(&w).unwrap();
+        storage
+            .add_settle_watch(&SettleWatch {
+                parent_task_id: "p2".into(),
+                ..w.clone()
+            })
+            .unwrap();
+        assert_eq!(storage.list_settle_watch().unwrap().len(), 2);
+        storage.drop_settle_watch("p1").unwrap();
+        assert_eq!(
+            storage.list_settle_watch().unwrap(),
+            vec![SettleWatch {
+                parent_task_id: "p2".into(),
+                ..w
+            }]
+        );
     }
 }

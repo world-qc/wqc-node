@@ -133,6 +133,13 @@ WQC_P2P_LISTEN_PORT: "4002"
 | `WQC_RESULT_RETRY_INTERVAL_SECS` | no | `5` | Background interval for retrying undelivered P2P results. |
 | `WQC_PCS_RETRY_INTERVAL_SECS` | no | `30` | Background interval for retrying requested-but-undelivered leaf PCS bundles. |
 | `WQC_PCS_UNREQUESTED_TTL_SECS` | no | `21600` | Drop a retained proof after this long with no PCS request (this node lost the proof-winner draw). |
+| `WQC_CHALLENGER_RPC_URL` | no | unset = off | L2 JSON-RPC of a SettlementV4 deployment. Turns on the challenger: after delivering a v2 leaf, the node checks its task's on-chain settlement during the challenge window against the evidence the orchestrator publishes (receipt and payees, signed payout bindings, root, wrap chain and leaves; wqc-docs `spec/zk-SNARK.md` §11.6). |
+| `WQC_CHALLENGER_SETTLEMENT` | with the RPC URL | — | SettlementV4 address. |
+| `WQC_CHALLENGER_CHAIN_ID` | with the RPC URL | — | L2 chain id (the payout bindings' chain). |
+| `WQC_CHALLENGER_ORCH_URL` | no | bootstrap URL's origin | Orchestrator HTTP base the evidence is fetched from. |
+| `WQC_CHALLENGER_PRIVATE_KEY` | no | unset = report only | L2 key that sends `challenge(taskId)` with the contract's bond. Without it a mismatch is only logged. |
+| `WQC_CHALLENGER_POLL_SECS` | no | `5` | How often settled tasks are checked. |
+| `WQC_CHALLENGER_MARGIN_SECS` | no | `30` | Evidence still unavailable when the window has less than this left is challenged. |
 | `WQC_PCS_TIMEOUT_SECS` | no | `7200` | Wall-clock budget for core `POST /leaf_pcs` (open-call builds included). |
 | `WQC_TASK_RETENTION_SECS` | no | `86400` | Delete `completed`/`failed` SQLite `tasks` older than this many seconds. `0` disables. |
 | `WQC_TASK_PRUNE_INTERVAL_SECS` | no | `3600` | Background interval for terminal-task prune. |

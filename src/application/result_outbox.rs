@@ -63,6 +63,12 @@ async fn try_deliver_pending(
             state
                 .storage
                 .delete_pending_result(orchestrator_pubkey, sub_task_id)?;
+            crate::application::challenger::watch_after_delivery(
+                &state,
+                orchestrator_pubkey,
+                sub_task_id,
+                wire_body,
+            );
             crate::infra::metrics::record_result_delivery("initial", "ok");
             tracing::info!(
                 "[Result Outbox] Delivered sub_task_id={} to orchestrator",
@@ -124,6 +130,12 @@ pub fn spawn_retry_loop(state: Arc<AppState>) {
                 match send_result_wire(state.clone(), &entry.wire_body).await {
                     Ok(()) => {
                         crate::infra::metrics::record_result_delivery("retry", "ok");
+                        crate::application::challenger::watch_after_delivery(
+                            &state,
+                            &entry.orchestrator_pubkey,
+                            &entry.sub_task_id,
+                            &entry.wire_body,
+                        );
                         if let Err(e) = state
                             .storage
                             .delete_pending_result(&entry.orchestrator_pubkey, &entry.sub_task_id)

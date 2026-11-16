@@ -141,6 +141,7 @@ mod tests {
             orchestrator_public_key: None,
             operator_id: None,
             operator_signing_key: None,
+            challenger: None,
         }
     }
 

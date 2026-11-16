@@ -80,6 +80,81 @@ pub struct NodeConfig {
     pub operator_id: Option<String>,
     /// Ed25519 key derived from `WQC_TESTNET_NODE_KEY` for operator bid signatures.
     pub operator_signing_key: Option<SigningKey>,
+    /// SettlementV4 challenger (`WQC_CHALLENGER_*`); off unless an RPC URL is set.
+    pub challenger: Option<ChallengerConfig>,
+}
+
+/// Checks this node's tasks settled on SettlementV4 (wqc-docs `spec/zk-SNARK.md` §11.6).
+#[derive(Debug, Clone)]
+pub struct ChallengerConfig {
+    /// L2 JSON-RPC (`WQC_CHALLENGER_RPC_URL`).
+    pub rpc_url: String,
+    /// SettlementV4 address (`WQC_CHALLENGER_SETTLEMENT`).
+    pub settlement: alloy::primitives::Address,
+    /// L2 chain id (`WQC_CHALLENGER_CHAIN_ID`), the payout bindings' chain.
+    pub chain_id: u64,
+    /// Orchestrator HTTP base (`WQC_CHALLENGER_ORCH_URL`; default: the bootstrap URL's origin).
+    pub orch_url: String,
+    /// L2 key that pays the bond (`WQC_CHALLENGER_PRIVATE_KEY`); without it the node only
+    /// reports what it would challenge.
+    pub private_key: Option<String>,
+    /// Poll interval (`WQC_CHALLENGER_POLL_SECS`, default 5).
+    pub poll_secs: u64,
+    /// Unavailable evidence is challenged once the window has less than this left
+    /// (`WQC_CHALLENGER_MARGIN_SECS`, default 30).
+    pub margin_secs: u64,
+}
+
+impl ChallengerConfig {
+    fn from_env() -> anyhow::Result<Option<Self>> {
+        let rpc_url = env::var("WQC_CHALLENGER_RPC_URL").unwrap_or_default();
+        if rpc_url.trim().is_empty() {
+            return Ok(None);
+        }
+        let required = |name: &str| -> anyhow::Result<String> {
+            let v = env::var(name).unwrap_or_default();
+            anyhow::ensure!(
+                !v.trim().is_empty(),
+                "{name} is required with WQC_CHALLENGER_RPC_URL"
+            );
+            Ok(v.trim().to_string())
+        };
+        let number = |name: &str, default: u64| -> anyhow::Result<u64> {
+            match env::var(name) {
+                Ok(v) if !v.trim().is_empty() => v
+                    .trim()
+                    .parse()
+                    .with_context(|| format!("{name} must be an integer")),
+                _ => Ok(default),
+            }
+        };
+        let private_key = env::var("WQC_CHALLENGER_PRIVATE_KEY")
+            .ok()
+            .filter(|k| !k.trim().is_empty());
+        Ok(Some(Self {
+            rpc_url: rpc_url.trim().to_string(),
+            settlement: required("WQC_CHALLENGER_SETTLEMENT")?
+                .parse()
+                .context("WQC_CHALLENGER_SETTLEMENT must be an address")?,
+            chain_id: required("WQC_CHALLENGER_CHAIN_ID")?
+                .parse()
+                .context("WQC_CHALLENGER_CHAIN_ID must be an integer")?,
+            orch_url: env::var("WQC_CHALLENGER_ORCH_URL")
+                .unwrap_or_default()
+                .trim()
+                .to_string(),
+            private_key,
+            poll_secs: number("WQC_CHALLENGER_POLL_SECS", 5)?.max(1),
+            margin_secs: number("WQC_CHALLENGER_MARGIN_SECS", 30)?,
+        }))
+    }
+}
+
+/// `http://host:port` of a bootstrap URL such as `http://host:port/api/v1/p2p/bootstrap`.
+fn url_origin(url: &str) -> Option<String> {
+    let (scheme, rest) = url.split_once("://")?;
+    let host = rest.split('/').next()?;
+    (!host.is_empty()).then(|| format!("{scheme}://{host}"))
 }
 
 impl NodeConfig {
@@ -232,6 +307,7 @@ impl NodeConfig {
             orchestrator_public_key: None,
             operator_id,
             operator_signing_key,
+            challenger: ChallengerConfig::from_env()?,
         })
     }
 
@@ -317,6 +393,9 @@ impl NodeConfig {
         if bootstrap.multiaddrs.is_empty() {
             anyhow::bail!("orchestrator bootstrap returned no multiaddrs");
         }
+        if let Some(c) = self.challenger.as_mut().filter(|c| c.orch_url.is_empty()) {
+            c.orch_url = url_origin(&bootstrap.source_url).unwrap_or_default();
+        }
         self.bootstrap_source_url = Some(bootstrap.source_url);
         self.orchestrator_peer_id = Some(bootstrap.peer_id);
         self.orchestrator_public_key = Some(bootstrap.public_key_b64);
@@ -354,4 +433,16 @@ fn load_signing_key_from_env() -> anyhow::Result<SigningKey> {
 pub fn libp2p_keypair_from_signing_key(signing_key: &SigningKey) -> anyhow::Result<Keypair> {
     Keypair::ed25519_from_bytes(signing_key.to_bytes())
         .map_err(|e| anyhow::anyhow!("failed to derive libp2p keypair: {:?}", e))
+}
+
+#[cfg(test)]
+mod challenger_tests {
+    #[test]
+    fn url_origin_keeps_scheme_and_host() {
+        assert_eq!(
+            super::url_origin("http://orch:9001/api/v1/p2p/bootstrap").as_deref(),
+            Some("http://orch:9001")
+        );
+        assert_eq!(super::url_origin("orch:9001"), None);
+    }
 }
