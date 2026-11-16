@@ -34,8 +34,27 @@ tower-http = { version = "0.5", features = ["cors"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"
 prometheus = "0.14.0"
+alloy = { version = "2.5.0", default-features = false, features = ["std", "providers", "provider-http", "signer-local", "sol-types", "contract", "network", "reqwest-rustls-tls"] }
+sha3 = "0.10"
+# The challenger recomputes a settled task's wrap digest from the published evidence
+# (root_input::verify_wrap_json), as the orchestrator's FFI verifier does.
+wqc-sv-stark = { git = "https://github.com/world-qc/wqc-stark-engine.git", branch = "main" }
 
 [profile.release]
 opt-level = 3
-lto = true
+# Thin: with Plonky3-recursion (wqc-sv-stark, for the challenger) a fat LTO link of the node
+# took about 150 s and 3.4-4.2 GB on an M-series Mac (9 min in a busy 4-vCPU container), thin
+# about 85 s and 2.5 GB, with the same wrap digest recompute time (about 8 s).
+lto = "thin"
 codegen-units = 1
+
+# Plonky3-recursion's crates (under wqc-sv-stark, for the challenger) are large; a single
+# codegen unit takes most of an hour each (as in wqc-core).
+[profile.release.package.p3-recursion]
+codegen-units = 16
+
+[profile.release.package.p3-circuit]
+codegen-units = 16
+
+[profile.release.package.p3-circuit-prover]
+codegen-units = 16

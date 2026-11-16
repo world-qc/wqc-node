@@ -1,4 +1,5 @@
 pub mod accept_task;
+pub mod challenger;
 pub mod pcs_open_call;
 pub mod pcs_outbox;
 pub mod ports;

@@ -6,6 +6,7 @@ pub mod operator;
 pub mod p2p;
 pub mod pcs;
 pub mod result;
+pub mod settlement;
 pub mod sv;
 pub mod token;
 pub mod validation;

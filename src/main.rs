@@ -109,6 +109,9 @@ async fn main() -> anyhow::Result<()> {
     application::result_outbox::spawn_retry_loop(shared_state.clone());
     application::pcs_outbox::spawn_retry_loop(shared_state.clone());
     application::task_prune::spawn_prune_loop(shared_state.clone());
+    if let Some(cfg) = config.challenger.clone() {
+        application::challenger::spawn(shared_state.clone(), cfg)?;
+    }
     infra::metrics::spawn_collector(shared_state.clone());
 
     let app = Router::new()
