@@ -42,7 +42,10 @@ wqc-sv-stark = { git = "https://github.com/world-qc/wqc-stark-engine.git", branc
 
 [profile.release]
 opt-level = 3
-lto = true
+# Thin: with Plonky3-recursion (wqc-sv-stark, for the challenger) a fat LTO link of the node
+# took about 150 s and 3.4-4.2 GB on an M-series Mac (9 min in a busy 4-vCPU container), thin
+# about 85 s and 2.5 GB, with the same wrap digest recompute time (about 8 s).
+lto = "thin"
 codegen-units = 1
 
 # Plonky3-recursion's crates (under wqc-sv-stark, for the challenger) are large; a single
