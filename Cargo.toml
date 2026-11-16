@@ -44,3 +44,14 @@ wqc-sv-stark = { git = "https://github.com/world-qc/wqc-stark-engine.git", branc
 opt-level = 3
 lto = true
 codegen-units = 1
+
+# Plonky3-recursion's crates (under wqc-sv-stark, for the challenger) are large; a single
+# codegen unit takes most of an hour each (as in wqc-core).
+[profile.release.package.p3-recursion]
+codegen-units = 16
+
+[profile.release.package.p3-circuit]
+codegen-units = 16
+
+[profile.release.package.p3-circuit-prover]
+codegen-units = 16
