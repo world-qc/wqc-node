@@ -210,8 +210,19 @@ async fn challenge(
         tracing::error!("[Challenger] task {task_id}: {f}");
     }
     if chain.can_challenge() {
-        let tx = chain.challenge(task_id).await?;
-        tracing::error!("[Challenger] task {task_id}: challenged in {tx}");
+        match chain.challenge(task_id).await {
+            Ok(tx) => tracing::error!("[Challenger] task {task_id}: challenged in {tx}"),
+            Err(e) => {
+                // Another node may have challenged first: then the task has left SettledCommitted.
+                match chain.task(task_id).await {
+                    Ok(t) if t.status != STATUS_SETTLED_COMMITTED => tracing::info!(
+                        "[Challenger] task {task_id}: already challenged or closed (status {})",
+                        t.status
+                    ),
+                    _ => return Err(e),
+                }
+            }
+        }
     } else {
         tracing::error!(
             "[Challenger] task {task_id}: would challenge (no WQC_CHALLENGER_PRIVATE_KEY)"
