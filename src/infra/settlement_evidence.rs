@@ -47,7 +47,7 @@ pub async fn fetch(
     let ev = task.wrap_evidence.context("no wrap_evidence")?;
     let receipt = get(client, &task.receipt_url).await.context("receipt")?;
     let mut bindings = BTreeMap::new();
-    for op in settlement::receipt_payees(&receipt).map_err(anyhow::Error::msg)? {
+    for op in settlement::payees_without_binding(&receipt).map_err(anyhow::Error::msg)? {
         let b: Binding = serde_json::from_slice(
             &get(
                 client,

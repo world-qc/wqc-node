@@ -83,6 +83,31 @@ struct Receipt {
 struct Payee {
     operator_id: String,
     amount_pwqc: String,
+    /// The payout binding fixed at finalize; absent in receipts from before.
+    #[serde(default)]
+    payout_address: String,
+    #[serde(default)]
+    chain_id: u64,
+    #[serde(default)]
+    nonce: u64,
+    #[serde(default)]
+    operator_pubkey_b64: String,
+    #[serde(default)]
+    signature_b64: String,
+}
+
+impl Payee {
+    fn binding(&self) -> Option<Binding> {
+        (!self.payout_address.is_empty()).then(|| Binding {
+            operator_id: self.operator_id.clone(),
+            chain_id: self.chain_id,
+            payout_address: self.payout_address.clone(),
+            nonce: self.nonce,
+            status: String::new(),
+            operator_pubkey_b64: self.operator_pubkey_b64.clone(),
+            signature_b64: self.signature_b64.clone(),
+        })
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -97,10 +122,15 @@ struct LeafRef {
     digest: [u64; 4],
 }
 
-/// The operator ids the receipt pays, so the caller can fetch their bindings.
-pub fn receipt_payees(receipt: &[u8]) -> Result<Vec<String>, String> {
+/// The payees whose binding the receipt does not carry (receipts from before bindings were
+/// fixed at finalize), so the caller can fetch theirs from the registry.
+pub fn payees_without_binding(receipt: &[u8]) -> Result<Vec<String>, String> {
     let r: Receipt = serde_json::from_slice(receipt).map_err(|e| format!("receipt JSON: {e}"))?;
-    Ok(r.payees.into_iter().map(|p| p.operator_id).collect())
+    Ok(r.payees
+        .into_iter()
+        .filter(|p| p.payout_address.is_empty())
+        .map(|p| p.operator_id)
+        .collect())
 }
 
 /// Checks the settled task against the evidence: `wrap_digest` is the digest recomputed from
@@ -251,9 +281,13 @@ fn payouts_hash(
 ) -> Result<[u8; 32], String> {
     let mut by_address: BTreeMap<String, U256> = BTreeMap::new();
     for p in payees {
-        let b = bindings
-            .get(&p.operator_id)
-            .ok_or_else(|| format!("payee {}: no payout binding", p.operator_id))?;
+        let carried = p.binding();
+        let b = match carried.as_ref() {
+            Some(b) => b,
+            None => bindings
+                .get(&p.operator_id)
+                .ok_or_else(|| format!("payee {}: no payout binding", p.operator_id))?,
+        };
         verify_binding(b, &p.operator_id, chain_id)?;
         let amount = U256::from_str_radix(&p.amount_pwqc, 10)
             .map_err(|e| format!("payee {} amount {:?}: {e}", p.operator_id, p.amount_pwqc))?;
@@ -468,10 +502,49 @@ mod tests {
     }
 
     #[test]
-    fn receipt_payees_lists_the_operators() {
+    fn payees_without_binding_lists_the_operators_to_fetch() {
         let f = fixture();
-        let payees = receipt_payees(&f.receipt).unwrap();
+        let payees = payees_without_binding(&f.receipt).unwrap();
         assert_eq!(payees.len(), 2);
         assert!(payees.contains(&f.me));
+        let carried = with_carried_bindings(&f);
+        assert!(payees_without_binding(&carried).unwrap().is_empty());
+    }
+
+    /// The fixture's receipt with each payee's binding carried in it (as fixed at finalize).
+    fn with_carried_bindings(f: &Fixture) -> Vec<u8> {
+        let mut r: serde_json::Value = serde_json::from_slice(&f.receipt).unwrap();
+        for p in r["payees"].as_array_mut().unwrap() {
+            let b = &f.bindings[p["operator_id"].as_str().unwrap()];
+            p["payout_address"] = b.payout_address.clone().into();
+            p["chain_id"] = b.chain_id.into();
+            p["nonce"] = b.nonce.into();
+            p["operator_pubkey_b64"] = b.operator_pubkey_b64.clone().into();
+            p["signature_b64"] = b.signature_b64.clone().into();
+        }
+        serde_json::to_vec(&r).unwrap()
+    }
+
+    /// Bindings carried in the receipt are checked as they are; the registry's current ones
+    /// (a later rotation) play no part.
+    #[test]
+    fn carried_bindings_ignore_the_registry() {
+        let mut f = fixture();
+        f.receipt = with_carried_bindings(&f);
+        f.task.receipt_hash = Sha3_256::digest(&f.receipt).into();
+        // The registry now points elsewhere (the operator rotated after finalize).
+        let me = f.me.clone();
+        f.bindings.get_mut(&me).unwrap().payout_address =
+            "0x00000000000000000000000000000000000000bb".into();
+        assert_eq!(run(&f, None), Vec::<String>::new());
+        f.bindings.clear();
+        assert_eq!(run(&f, None), Vec::<String>::new());
+
+        // A carried binding that was tampered with (address not what the operator signed) fails.
+        let mut r: serde_json::Value = serde_json::from_slice(&f.receipt).unwrap();
+        r["payees"][0]["payout_address"] = "0x00000000000000000000000000000000000000cc".into();
+        f.receipt = serde_json::to_vec(&r).unwrap();
+        f.task.receipt_hash = Sha3_256::digest(&f.receipt).into();
+        assert!(!run(&f, None).is_empty());
     }
 }
