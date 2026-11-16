@@ -36,6 +36,9 @@ tracing-subscriber = "0.3"
 prometheus = "0.14.0"
 alloy = { version = "2.5.0", default-features = false, features = ["std", "providers", "provider-http", "signer-local", "sol-types", "contract", "network", "reqwest-rustls-tls"] }
 sha3 = "0.10"
+# The challenger recomputes a settled task's wrap digest from the published evidence
+# (root_input::verify_wrap_json), as the orchestrator's FFI verifier does.
+wqc-sv-stark = { git = "https://github.com/world-qc/wqc-stark-engine.git", branch = "main" }
 
 [profile.release]
 opt-level = 3

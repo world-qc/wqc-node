@@ -158,7 +158,19 @@ async fn check_task(
             .await;
         }
     };
-    let wrap_digest = recompute_wrap_digest(&ev)?;
+    // Evidence that does not verify is no evidence: the digest check fails below.
+    let wrap_digest = match recompute_wrap_digest(&ev).await {
+        Ok(d) => Some(d),
+        Err(e) => {
+            return challenge(
+                state,
+                chain,
+                task_id,
+                &[format!("wrap evidence does not verify: {e:#}")],
+            )
+            .await;
+        }
+    };
     let own: Vec<OwnLeaf> = watches
         .iter()
         .map(|w| OwnLeaf {
@@ -209,14 +221,18 @@ async fn challenge(
     Ok(())
 }
 
-/// The wrap digest from the evidence's leaves, root and wrap chain. Not recomputed yet: the
-/// leaves-JSON verifier is still private to wqc-stark-engine's FFI crate. Until it is a
-/// wqc-sv-stark function, `None` skips the wrapDigest check (the other checks still run).
-fn recompute_wrap_digest(
+/// The wrap digest from the evidence's leaves, root and wrap chain: the root verified over
+/// the leaves, then the wrap chain over the root (several seconds of CPU, off the runtime).
+async fn recompute_wrap_digest(
     ev: &settlement_evidence::FetchedEvidence,
-) -> anyhow::Result<Option<[u64; 4]>> {
-    let _ = (&ev.leaves_json, &ev.root, &ev.wrap);
-    Ok(None)
+) -> anyhow::Result<[u64; 4]> {
+    let leaves = String::from_utf8(ev.leaves_json.clone())?;
+    let (root, wrap) = (ev.root.clone(), ev.wrap.clone());
+    let digest = tokio::task::spawn_blocking(move || {
+        wqc_sv_stark::root_input::verify_wrap_json(&leaves, &root, &wrap)
+    })
+    .await??;
+    Ok(digest)
 }
 
 fn unix_now() -> i64 {
