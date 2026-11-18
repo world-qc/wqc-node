@@ -104,6 +104,9 @@ pub struct ChallengerConfig {
     /// (`WQC_CHALLENGER_MARGIN_SECS`, default 120: recomputing the wrap digest alone took about
     /// a minute on a busy 4-vCPU devnet).
     pub margin_secs: u64,
+    /// Settled tasks checked at once (`WQC_CHALLENGER_CONCURRENCY`, default 4): each fetches
+    /// its evidence (up to 256 MiB) and recomputes the wrap digest.
+    pub concurrency: usize,
 }
 
 impl ChallengerConfig {
@@ -147,6 +150,7 @@ impl ChallengerConfig {
             private_key,
             poll_secs: number("WQC_CHALLENGER_POLL_SECS", 5)?.max(1),
             margin_secs: number("WQC_CHALLENGER_MARGIN_SECS", 120)?,
+            concurrency: number("WQC_CHALLENGER_CONCURRENCY", 4)?.clamp(1, 64) as usize,
         }))
     }
 }
