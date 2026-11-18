@@ -140,7 +140,7 @@ WQC_P2P_LISTEN_PORT: "4002"
 | `WQC_CHALLENGER_PRIVATE_KEY` | no | unset = report only | L2 key that sends `challenge(taskId)` with the contract's bond. Without it a mismatch is only logged. |
 | `WQC_CHALLENGER_POLL_SECS` | no | `5` | How often settled tasks are checked. A task without on-chain escrow is dropped at once; one with escrow but not yet settled is asked every 60 s, for at most a day. Evidence fetches time out after 120 s and stop at 256 MiB. |
 | `WQC_CHALLENGER_MARGIN_SECS` | no | `120` | Evidence still unavailable when the window has less than this left is challenged. Leave room for recomputing the wrap digest (about a minute on a busy 4-vCPU host). |
-| `WQC_CHALLENGER_CONCURRENCY` | no | `4` (1–64) | Settled tasks checked at once. Each holds its evidence (up to 256 MiB) and recomputes the wrap digest on a blocking thread; challenges are still sent one at a time. |
+| `WQC_CHALLENGER_CONCURRENCY` | no | `4` (1–64) | Settled tasks checked at once. Each holds its evidence (up to 256 MiB, so 4 is about 1 GiB at worst; keep it low) and recomputes the wrap digest on a blocking thread, so on a busy 4-vCPU host each digest takes several times as long as alone. Challenges are still sent one at a time. |
 | `WQC_PCS_TIMEOUT_SECS` | no | `7200` | Wall-clock budget for core `POST /leaf_pcs` (open-call builds included). |
 | `WQC_TASK_RETENTION_SECS` | no | `86400` | Delete `completed`/`failed` SQLite `tasks` older than this many seconds. `0` disables. |
 | `WQC_TASK_PRUNE_INTERVAL_SECS` | no | `3600` | Background interval for terminal-task prune. |

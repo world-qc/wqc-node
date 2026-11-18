@@ -36,8 +36,9 @@ pub struct SettlementChain {
     contract: Address,
     /// Without a key the challenger only reports.
     can_challenge: bool,
-    /// Tasks are checked concurrently; challenges from the one key go out one at a time so
-    /// their nonces do not collide.
+    /// Tasks are checked concurrently; challenges from the one key go out one at a time, held
+    /// until mined, so their nonces do not collide (alloy's nonce filler reads the latest
+    /// count). Do not drop this lock.
     send: tokio::sync::Mutex<()>,
 }
 

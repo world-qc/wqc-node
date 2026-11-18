@@ -104,8 +104,9 @@ pub struct ChallengerConfig {
     /// (`WQC_CHALLENGER_MARGIN_SECS`, default 120: recomputing the wrap digest alone took about
     /// a minute on a busy 4-vCPU devnet).
     pub margin_secs: u64,
-    /// Settled tasks checked at once (`WQC_CHALLENGER_CONCURRENCY`, default 4): each fetches
-    /// its evidence (up to 256 MiB) and recomputes the wrap digest.
+    /// Settled tasks checked at once (`WQC_CHALLENGER_CONCURRENCY`, default 4, at most 64):
+    /// each holds its evidence (up to 256 MiB: about 1 GiB at 4) and recomputes the wrap
+    /// digest, which on a busy 4-vCPU host takes several times as long with four at once.
     pub concurrency: usize,
 }
 
