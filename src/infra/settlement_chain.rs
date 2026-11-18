@@ -36,6 +36,10 @@ pub struct SettlementChain {
     contract: Address,
     /// Without a key the challenger only reports.
     can_challenge: bool,
+    /// Tasks are checked concurrently; challenges from the one key go out one at a time, held
+    /// until mined, so their nonces do not collide (alloy's nonce filler reads the latest
+    /// count). Do not drop this lock.
+    send: tokio::sync::Mutex<()>,
 }
 
 /// SettlementV4's task key: keccak256 of the task id string.
@@ -70,6 +74,7 @@ impl SettlementChain {
             provider,
             contract,
             can_challenge,
+            send: tokio::sync::Mutex::new(()),
         })
     }
 
@@ -106,6 +111,7 @@ impl SettlementChain {
     /// it is mined.
     pub async fn challenge(&self, task_id: &str) -> anyhow::Result<B256> {
         anyhow::ensure!(self.can_challenge, "no L2 key to challenge with");
+        let _send = self.send.lock().await;
         let c = ISettlementV4::new(self.contract, &self.provider);
         let bond = c.challengeBond().call().await?;
         let receipt = c

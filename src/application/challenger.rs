@@ -6,6 +6,8 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::time::Duration;
 
+use futures::stream::{self, StreamExt};
+
 use crate::application::state::AppState;
 use crate::config::ChallengerConfig;
 use crate::domain::models::Proof;
@@ -125,14 +127,26 @@ async fn poll(
     }
     next_unsettled_check.retain(|task_id, _| by_task.contains_key(task_id));
     let now = chain.chain_time().await?;
-    for (task_id, watches) in by_task {
-        if next_unsettled_check
-            .get(&task_id)
-            .is_some_and(|&at| unix_now() < at)
-        {
-            continue;
-        }
-        match check_task(state, cfg, chain, client, &task_id, &watches, now).await {
+    let due: Vec<_> = by_task
+        .into_iter()
+        .filter(|(task_id, _)| {
+            next_unsettled_check
+                .get(task_id)
+                .is_none_or(|&at| unix_now() >= at)
+        })
+        .collect();
+    // Tasks are independent; checking them one at a time let a slow one (evidence fetch,
+    // wrap digest) hold up the others' windows.
+    let checked: Vec<_> = stream::iter(due)
+        .map(|(task_id, watches)| async move {
+            let r = check_task(state, cfg, chain, client, &task_id, &watches, now).await;
+            (task_id, r)
+        })
+        .buffer_unordered(cfg.concurrency)
+        .collect()
+        .await;
+    for (task_id, r) in checked {
+        match r {
             Ok(Checked::Unsettled) => {
                 next_unsettled_check.insert(task_id, unix_now() + UNSETTLED_POLL_SECS);
             }
