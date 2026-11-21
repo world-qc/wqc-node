@@ -19,6 +19,11 @@ pub const FEATURE_SV_STARK_DYNAMIC: u32 = 1 << 6;
 /// and publishes their final state (`proof.sv_state_b64`). Set with [`FEATURE_SV_STARK_V2`]
 /// when core reports `sv_state_outputs`.
 pub const FEATURE_SV_STATE_OUTPUTS: u32 = 1 << 7;
+/// This node also proves the tail of a circuit too deep for one v2 leaf (`sv_segment`: the
+/// whole circuit, the cut and the tail's index), from the state the gates before the cut
+/// reach. Set with [`FEATURE_SV_STARK_V2`] when
+/// core reports `sv_segments`.
+pub const FEATURE_SV_SEGMENTS: u32 = 1 << 8;
 
 /// What this node proves as v2 (sv-stark) leaves. The other two need `proves`.
 #[derive(Clone, Copy, Debug, Default)]
@@ -29,6 +34,8 @@ pub struct SvCapability {
     pub dynamic: bool,
     /// `statevector_scalar` and `expectation` with a published state (bit 7).
     pub state_outputs: bool,
+    /// Segments of a circuit too deep for one leaf (bit 8).
+    pub segments: bool,
 }
 
 /// Maps gate names (from `GET /gates`) to the orchestrator feature bitmask.
@@ -71,6 +78,9 @@ pub fn node_features(gates: &[String], judges_work: bool, sv: SvCapability) -> u
         }
         if sv.state_outputs {
             features |= FEATURE_SV_STATE_OUTPUTS;
+        }
+        if sv.segments {
+            features |= FEATURE_SV_SEGMENTS;
         }
     }
     features
@@ -123,7 +133,8 @@ mod tests {
                 SvCapability {
                     proves: true,
                     dynamic: false,
-                    state_outputs: false
+                    state_outputs: false,
+                    segments: false
                 }
             ),
             FEATURE_STANDARD_GATES | FEATURE_SV_STARK_V2
@@ -141,7 +152,8 @@ mod tests {
                 SvCapability {
                     proves: true,
                     dynamic: true,
-                    state_outputs: false
+                    state_outputs: false,
+                    segments: false
                 }
             ),
             FEATURE_STANDARD_GATES | FEATURE_SV_STARK_V2 | FEATURE_SV_STARK_DYNAMIC
@@ -153,7 +165,8 @@ mod tests {
                 SvCapability {
                     proves: false,
                     dynamic: true,
-                    state_outputs: true
+                    state_outputs: true,
+                    segments: false
                 }
             ),
             FEATURE_STANDARD_GATES
@@ -171,12 +184,33 @@ mod tests {
                 SvCapability {
                     proves: true,
                     dynamic: false,
-                    state_outputs: true
+                    state_outputs: true,
+                    segments: false
                 }
             ),
             FEATURE_STANDARD_GATES | FEATURE_SV_STARK_V2 | FEATURE_SV_STATE_OUTPUTS
         );
         assert_eq!(FEATURE_SV_STATE_OUTPUTS, 1 << 7);
+    }
+
+    #[test]
+    fn sv_segments_bit_needs_the_v2_bit() {
+        let gates = vec!["H".into()];
+        let sv = |proves| SvCapability {
+            proves,
+            dynamic: false,
+            state_outputs: false,
+            segments: true,
+        };
+        assert_eq!(
+            node_features(&gates, false, sv(true)),
+            FEATURE_STANDARD_GATES | FEATURE_SV_STARK_V2 | FEATURE_SV_SEGMENTS
+        );
+        assert_eq!(
+            node_features(&gates, false, sv(false)),
+            FEATURE_STANDARD_GATES
+        );
+        assert_eq!(FEATURE_SV_SEGMENTS, 1 << 8);
     }
 
     #[test]

@@ -50,6 +50,9 @@ pub struct NodeConfig {
     /// Core proves `statevector_scalar` and `expectation` as v2 leaves too and publishes their
     /// state (`sv_state_outputs` in `/sysinfo`): the node advertises capability bit 7.
     pub sv_state_outputs: bool,
+    /// Core proves the tail of a circuit too deep for one v2 leaf (`sv_segments` in
+    /// `/sysinfo`): the node advertises capability bit 8.
+    pub sv_segments: bool,
     /// Share of `min(deadline, compute timeout)` an estimate may use
     /// (`WQC_WORK_BUDGET_MARGIN`, default 0.5).
     pub work_budget_margin: f64,
@@ -296,6 +299,7 @@ impl NodeConfig {
             sv_max_rows: 0,
             sv_dynamic: false,
             sv_state_outputs: false,
+            sv_segments: false,
             work_budget_margin,
             work_overhead_secs,
             work_unknown_secs,
@@ -346,6 +350,10 @@ impl NodeConfig {
         self.sv_state_outputs = self.sv_max_rows > 0 && info.sv_state_outputs == Some(true);
         if self.sv_state_outputs {
             tracing::info!("Core proves scalar and expectation v2 leaves; advertising them");
+        }
+        self.sv_segments = self.sv_max_rows > 0 && info.sv_segments == Some(true);
+        if self.sv_segments {
+            tracing::info!("Core proves v2 segments of deep circuits; advertising them");
         }
         match sv_rates {
             Some(r) if self.sv_max_rows > 0 => tracing::info!(

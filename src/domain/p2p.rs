@@ -84,6 +84,9 @@ pub struct SubTask {
     /// Prove as a v2 (sv-stark) leaf of this many gate rows. 0 means v1.
     #[serde(default)]
     pub sv_leaf_rows: u64,
+    /// With `sv_leaf_rows`: the segment of the whole circuit this sub-task proves.
+    #[serde(default)]
+    pub sv_segment: Option<crate::domain::models::SvSegment>,
 }
 
 /// Mirrors orchestrator `bid.SerializeAnnouncementPayload` byte layout exactly.
@@ -221,6 +224,16 @@ pub fn serialize_dispatch_payload(sub_task: &SubTask) -> Result<Vec<u8>, String>
     // an old node rejects a v2 one.
     if sub_task.sv_leaf_rows != 0 {
         payload.extend_from_slice(&sub_task.sv_leaf_rows.to_be_bytes());
+    }
+    // Present only on a segment, after the rows: the cut count, each cut and the index, as
+    // u32 big-endian. An unsegmented dispatch stays byte-identical, and an old node rejects a
+    // segment's signature.
+    if let Some(seg) = &sub_task.sv_segment {
+        payload.extend_from_slice(&(seg.cuts.len() as u32).to_be_bytes());
+        for c in &seg.cuts {
+            payload.extend_from_slice(&c.to_be_bytes());
+        }
+        payload.extend_from_slice(&seg.index.to_be_bytes());
     }
 
     Ok(payload)
@@ -514,6 +527,7 @@ impl SubTask {
             noise_model: self.noise_model,
             security_level: self.security_level,
             sv_leaf_rows: (self.sv_leaf_rows > 0).then_some(self.sv_leaf_rows),
+            sv_segment: self.sv_segment,
         }
     }
 }
@@ -1032,10 +1046,33 @@ mod tests {
         want.extend_from_slice(&[0, 0, 0, 0, 0, 0x10, 0, 0]);
         assert_eq!(signed, want);
 
-        let req = v2.into_compute_request("peer");
+        let req = v2.clone().into_compute_request("peer");
         assert_eq!(req.sv_leaf_rows, Some(1 << 20));
         let body = serde_json::to_value(&req).expect("request");
         assert_eq!(body["sv_leaf_rows"], 1 << 20);
+        assert!(
+            body.get("sv_segment").is_none(),
+            "no segment on an uncut leaf"
+        );
+
+        // A segment appends the cut count, each cut and the index after the rows, and is
+        // forwarded to core as it came.
+        let seg = SubTask {
+            sv_segment: Some(crate::domain::models::SvSegment {
+                cuts: vec![3, 9],
+                index: 1,
+            }),
+            ..v2
+        };
+        let signed_seg = serialize_dispatch_payload(&seg).expect("segment");
+        let mut want_seg = signed.clone();
+        want_seg.extend_from_slice(&[0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 9, 0, 0, 0, 1]);
+        assert_eq!(signed_seg, want_seg);
+        let body = serde_json::to_value(seg.into_compute_request("peer")).expect("request");
+        assert_eq!(
+            body["sv_segment"],
+            serde_json::json!({"cuts": [3, 9], "index": 1})
+        );
     }
 
     #[test]
