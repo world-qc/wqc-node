@@ -62,6 +62,17 @@ pub struct ComputeRequest {
     /// Gate rows of a v2 (sv-stark) leaf; core proves v2 when present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sv_leaf_rows: Option<u64>,
+    /// With `sv_leaf_rows`: the segment of the (whole) circuit this sub-task proves.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sv_segment: Option<SvSegment>,
+}
+
+/// A segment of a circuit too deep for one v2 leaf (`wqc_sv_stark::segment`): the circuit is
+/// cut at `cuts` (indices into its unitary gates) and this sub-task proves segment `index`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SvSegment {
+    pub cuts: Vec<u32>,
+    pub index: u32,
 }
 
 /// Exact scalar tree. Field order matches the orchestrator's signed JSON.
@@ -286,6 +297,9 @@ pub struct CoreSystemInfo {
     /// Core proves `statevector_scalar` and `expectation` as v2 leaves with a published state.
     #[serde(default)]
     pub sv_state_outputs: Option<bool>,
+    /// Core proves segments of a circuit too deep for one v2 leaf (`sv_segment`).
+    #[serde(default)]
+    pub sv_segments: Option<bool>,
 }
 
 fn default_pcs_memory_policy() -> String {

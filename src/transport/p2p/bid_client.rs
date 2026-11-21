@@ -43,6 +43,7 @@ impl BidClient {
                 proves: self.config.sv_max_rows > 0,
                 dynamic: self.config.sv_dynamic,
                 state_outputs: self.config.sv_state_outputs,
+                segments: self.config.sv_segments,
             },
         );
         if !bid::should_bid_on(&announcement, &self.config, supported_features) {

@@ -540,6 +540,7 @@ mod tests {
                 noise_model: None,
                 security_level: String::new(),
                 sv_leaf_rows: None,
+                sv_segment: None,
             },
             orchestrator_pubkey: "orch-pubkey".to_string(),
             budget: None,
