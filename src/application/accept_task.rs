@@ -81,6 +81,30 @@ fn check_sv_leaf_rows(rows: u64, sv_max_rows: u64) -> Result<(), AcceptTaskError
     Ok(())
 }
 
+/// A tail (`sv_segment`) is only ever a v2 leaf on a node that proves tails: without
+/// `sv_leaf_rows` core would run it as v1 over the whole circuit, and a node without
+/// `sv_segments` did not bid for it.
+fn check_sv_segment(
+    has_segment: bool,
+    rows: Option<u64>,
+    sv_segments: bool,
+) -> Result<(), AcceptTaskError> {
+    if !has_segment {
+        return Ok(());
+    }
+    if rows.unwrap_or(0) == 0 {
+        return Err(AcceptTaskError::Validation(
+            "sv_segment without sv_leaf_rows".to_string(),
+        ));
+    }
+    if !sv_segments {
+        return Err(AcceptTaskError::Validation(
+            "sv_segment, but this node does not prove tails".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 pub async fn accept_compute_task(
     state: &Arc<AppState>,
     mut request: ComputeRequest,
@@ -101,6 +125,11 @@ pub async fn accept_compute_task(
     if let Some(rows) = request.sv_leaf_rows {
         check_sv_leaf_rows(rows, state.config.sv_max_rows)?;
     }
+    check_sv_segment(
+        request.sv_segment.is_some(),
+        request.sv_leaf_rows,
+        state.config.sv_segments,
+    )?;
 
     validate_circuit_logic(
         &request.circuit,
@@ -226,6 +255,15 @@ mod tests {
             check_sv_leaf_rows(1, 0).is_err(),
             "a node without v2 refuses every leaf"
         );
+    }
+
+    #[test]
+    fn refuses_a_tail_without_rows_or_tail_support() {
+        assert!(check_sv_segment(false, None, false).is_ok());
+        assert!(check_sv_segment(true, Some(1 << 10), true).is_ok());
+        assert!(check_sv_segment(true, None, true).is_err());
+        assert!(check_sv_segment(true, Some(0), true).is_err());
+        assert!(check_sv_segment(true, Some(1 << 10), false).is_err());
     }
 
     #[test]
