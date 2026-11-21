@@ -19,8 +19,9 @@ pub const FEATURE_SV_STARK_DYNAMIC: u32 = 1 << 6;
 /// and publishes their final state (`proof.sv_state_b64`). Set with [`FEATURE_SV_STARK_V2`]
 /// when core reports `sv_state_outputs`.
 pub const FEATURE_SV_STATE_OUTPUTS: u32 = 1 << 7;
-/// This node also proves segments of a circuit too deep for one v2 leaf (`sv_segment`: the
-/// whole circuit, the cuts and the segment's index). Set with [`FEATURE_SV_STARK_V2`] when
+/// This node also proves the tail of a circuit too deep for one v2 leaf (`sv_segment`: the
+/// whole circuit, the cut and the tail's index), from the state the gates before the cut
+/// reach. Set with [`FEATURE_SV_STARK_V2`] when
 /// core reports `sv_segments`.
 pub const FEATURE_SV_SEGMENTS: u32 = 1 << 8;
 

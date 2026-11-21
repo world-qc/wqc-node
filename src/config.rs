@@ -50,7 +50,7 @@ pub struct NodeConfig {
     /// Core proves `statevector_scalar` and `expectation` as v2 leaves too and publishes their
     /// state (`sv_state_outputs` in `/sysinfo`): the node advertises capability bit 7.
     pub sv_state_outputs: bool,
-    /// Core proves segments of a circuit too deep for one v2 leaf (`sv_segments` in
+    /// Core proves the tail of a circuit too deep for one v2 leaf (`sv_segments` in
     /// `/sysinfo`): the node advertises capability bit 8.
     pub sv_segments: bool,
     /// Share of `min(deadline, compute timeout)` an estimate may use

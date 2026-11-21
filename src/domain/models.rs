@@ -68,7 +68,8 @@ pub struct ComputeRequest {
 }
 
 /// A segment of a circuit too deep for one v2 leaf (`wqc_sv_stark::segment`): the circuit is
-/// cut at `cuts` (indices into its unitary gates) and this sub-task proves segment `index`.
+/// cut at `cuts` (indices into its unitary gates) and this sub-task proves segment `index`,
+/// the last one (the tail).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SvSegment {
     pub cuts: Vec<u32>,
@@ -297,7 +298,7 @@ pub struct CoreSystemInfo {
     /// Core proves `statevector_scalar` and `expectation` as v2 leaves with a published state.
     #[serde(default)]
     pub sv_state_outputs: Option<bool>,
-    /// Core proves segments of a circuit too deep for one v2 leaf (`sv_segment`).
+    /// Core proves the tail of a circuit too deep for one v2 leaf (`sv_segment`).
     #[serde(default)]
     pub sv_segments: Option<bool>,
 }
