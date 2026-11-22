@@ -71,14 +71,37 @@ pub fn compact_qubit_limit(output_mode: &str, max_qubits: usize, max_mps_qubits:
 }
 
 /// A v2 leaf larger than this node advertised would run out of memory or time, and the node
-/// would be slashed for it; refuse it instead (docs `p2p-protocols.md` §5).
-fn check_sv_leaf_rows(rows: u64, sv_max_rows: u64) -> Result<(), AcceptTaskError> {
-    if rows > sv_max_rows {
+/// would be slashed for it; refuse it instead (docs `p2p-protocols.md` §5). The node budgets
+/// the leaf's effective rows (`wqc_sv_stark::leaf::effective_rows`), which count its basis
+/// states above 16 qubits; such a leaf also needs bit 9 (`wide`).
+fn check_sv_leaf_rows(
+    rows: u64,
+    leaf_qubits: usize,
+    sv_max_rows: u64,
+    wide: bool,
+) -> Result<(), AcceptTaskError> {
+    if leaf_qubits > 16 && !wide {
         return Err(AcceptTaskError::Validation(format!(
-            "v2 leaf of {rows} gate rows exceeds this node's sv_max_rows {sv_max_rows}"
+            "v2 leaf on {leaf_qubits} qubits, but this node proves at most 16"
+        )));
+    }
+    let effective = wqc_sv_stark::leaf::effective_rows(leaf_qubits, rows as usize);
+    if effective > sv_max_rows {
+        return Err(AcceptTaskError::Validation(format!(
+            "v2 leaf of {rows} gate rows on {leaf_qubits} qubits ({effective} effective) exceeds this node's sv_max_rows {sv_max_rows}"
         )));
     }
     Ok(())
+}
+
+/// The qubits of the leaf the circuit becomes (`wqc_sv_stark::wire::parse_leaf`): the
+/// register plus one ancilla per RESET that needs one. A circuit the reader refuses counts as
+/// its register; core refuses it anyway.
+fn sv_leaf_qubits(circuit: &[crate::domain::models::Gate], qubit_count: usize) -> usize {
+    serde_json::to_string(circuit)
+        .ok()
+        .and_then(|json| wqc_sv_stark::wire::parse_leaf(&json, qubit_count).ok())
+        .map_or(qubit_count, |c| c.qubits)
 }
 
 /// A tail (`sv_segment`) is only ever a v2 leaf on a node that proves tails: without
@@ -123,7 +146,8 @@ pub async fn accept_compute_task(
     }
 
     if let Some(rows) = request.sv_leaf_rows {
-        check_sv_leaf_rows(rows, state.config.sv_max_rows)?;
+        let qubits = sv_leaf_qubits(&request.circuit, request.qubit_count);
+        check_sv_leaf_rows(rows, qubits, state.config.sv_max_rows, state.config.sv_wide)?;
     }
     check_sv_segment(
         request.sv_segment.is_some(),
@@ -249,10 +273,14 @@ mod tests {
 
     #[test]
     fn refuses_v2_leaves_over_sv_max_rows() {
-        assert!(check_sv_leaf_rows(1 << 18, 1 << 18).is_ok());
-        assert!(check_sv_leaf_rows((1 << 18) + 1, 1 << 18).is_err());
+        assert!(check_sv_leaf_rows(1 << 18, 8, 1 << 18, false).is_ok());
+        assert!(check_sv_leaf_rows((1 << 18) + 1, 8, 1 << 18, false).is_err());
+        // Above 16 qubits: bit 9, and the states count: 2^16 rows on 17 qubits are 2^18.
+        assert!(check_sv_leaf_rows(1 << 16, 17, 1 << 18, false).is_err());
+        assert!(check_sv_leaf_rows(1 << 16, 17, 1 << 18, true).is_ok());
+        assert!(check_sv_leaf_rows(1 << 16, 17, (1 << 18) - 1, true).is_err());
         assert!(
-            check_sv_leaf_rows(1, 0).is_err(),
+            check_sv_leaf_rows(1, 8, 0, false).is_err(),
             "a node without v2 refuses every leaf"
         );
     }

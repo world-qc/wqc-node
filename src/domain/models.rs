@@ -301,6 +301,10 @@ pub struct CoreSystemInfo {
     /// Core proves the tail of a circuit too deep for one v2 leaf (`sv_segment`).
     #[serde(default)]
     pub sv_segments: Option<bool>,
+    /// The most qubits a v2 leaf of this core may have, ancillas included; absent on an older
+    /// core, which proves 16.
+    #[serde(default)]
+    pub sv_max_qubits: Option<u32>,
 }
 
 fn default_pcs_memory_policy() -> String {

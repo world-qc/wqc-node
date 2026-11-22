@@ -7617,7 +7617,7 @@ dependencies = [
 [[package]]
 name = "wqc-sv-stark"
 version = "0.1.0"
-source = "git+https://github.com/world-qc/wqc-stark-engine.git?branch=main#5358c40c63c778e00fd6a295d0e927bc10a1623d"
+source = "git+https://github.com/world-qc/wqc-stark-engine.git?branch=main#2dafce23b72fd0e65dd9c0b46181a3363b82d271"
 dependencies = [
  "base64 0.22.1",
  "libm",

@@ -53,6 +53,9 @@ pub struct NodeConfig {
     /// Core proves the tail of a circuit too deep for one v2 leaf (`sv_segments` in
     /// `/sysinfo`): the node advertises capability bit 8.
     pub sv_segments: bool,
+    /// Core proves v2 leaves of up to 20 qubits (`sv_max_qubits` in `/sysinfo`): the node
+    /// advertises capability bit 9 and budgets such a leaf's basis states.
+    pub sv_wide: bool,
     /// Share of `min(deadline, compute timeout)` an estimate may use
     /// (`WQC_WORK_BUDGET_MARGIN`, default 0.5).
     pub work_budget_margin: f64,
@@ -300,6 +303,7 @@ impl NodeConfig {
             sv_dynamic: false,
             sv_state_outputs: false,
             sv_segments: false,
+            sv_wide: false,
             work_budget_margin,
             work_overhead_secs,
             work_unknown_secs,
@@ -354,6 +358,10 @@ impl NodeConfig {
         self.sv_segments = self.sv_max_rows > 0 && info.sv_segments == Some(true);
         if self.sv_segments {
             tracing::info!("Core proves v2 segments of deep circuits; advertising them");
+        }
+        self.sv_wide = self.sv_max_rows > 0 && info.sv_max_qubits.is_some_and(|q| q >= 20);
+        if self.sv_wide {
+            tracing::info!("Core proves v2 leaves of up to 20 qubits; advertising them");
         }
         match sv_rates {
             Some(r) if self.sv_max_rows > 0 => tracing::info!(

@@ -24,6 +24,10 @@ pub const FEATURE_SV_STATE_OUTPUTS: u32 = 1 << 7;
 /// reach. Set with [`FEATURE_SV_STARK_V2`] when
 /// core reports `sv_segments`.
 pub const FEATURE_SV_SEGMENTS: u32 = 1 << 8;
+/// This node also proves v2 leaves of 17 to 20 qubits (ancillas included), budgeting their
+/// basis states (`wqc_sv_stark::leaf::effective_rows`) against its `sv_max_rows`. Set with
+/// [`FEATURE_SV_STARK_V2`] when core reports `sv_max_qubits` of 20 or more.
+pub const FEATURE_SV_WIDE_LEAVES: u32 = 1 << 9;
 
 /// What this node proves as v2 (sv-stark) leaves. The other two need `proves`.
 #[derive(Clone, Copy, Debug, Default)]
@@ -36,6 +40,8 @@ pub struct SvCapability {
     pub state_outputs: bool,
     /// Segments of a circuit too deep for one leaf (bit 8).
     pub segments: bool,
+    /// Leaves of 17 to 20 qubits (bit 9).
+    pub wide: bool,
 }
 
 /// Maps gate names (from `GET /gates`) to the orchestrator feature bitmask.
@@ -81,6 +87,9 @@ pub fn node_features(gates: &[String], judges_work: bool, sv: SvCapability) -> u
         }
         if sv.segments {
             features |= FEATURE_SV_SEGMENTS;
+        }
+        if sv.wide {
+            features |= FEATURE_SV_WIDE_LEAVES;
         }
     }
     features
@@ -134,7 +143,8 @@ mod tests {
                     proves: true,
                     dynamic: false,
                     state_outputs: false,
-                    segments: false
+                    segments: false,
+                    wide: false
                 }
             ),
             FEATURE_STANDARD_GATES | FEATURE_SV_STARK_V2
@@ -153,7 +163,8 @@ mod tests {
                     proves: true,
                     dynamic: true,
                     state_outputs: false,
-                    segments: false
+                    segments: false,
+                    wide: false
                 }
             ),
             FEATURE_STANDARD_GATES | FEATURE_SV_STARK_V2 | FEATURE_SV_STARK_DYNAMIC
@@ -166,7 +177,8 @@ mod tests {
                     proves: false,
                     dynamic: true,
                     state_outputs: true,
-                    segments: false
+                    segments: false,
+                    wide: false
                 }
             ),
             FEATURE_STANDARD_GATES
@@ -185,7 +197,8 @@ mod tests {
                     proves: true,
                     dynamic: false,
                     state_outputs: true,
-                    segments: false
+                    segments: false,
+                    wide: false
                 }
             ),
             FEATURE_STANDARD_GATES | FEATURE_SV_STARK_V2 | FEATURE_SV_STATE_OUTPUTS
@@ -201,6 +214,7 @@ mod tests {
             dynamic: false,
             state_outputs: false,
             segments: true,
+            wide: false,
         };
         assert_eq!(
             node_features(&gates, false, sv(true)),
@@ -234,5 +248,29 @@ mod tests {
             features,
             FEATURE_STANDARD_GATES | FEATURE_NETWORK_GATE_SPLIT
         ));
+    }
+}
+
+#[cfg(test)]
+mod wide_tests {
+    use super::*;
+
+    #[test]
+    fn sv_wide_bit_needs_the_v2_bit() {
+        let gates = vec!["H".into()];
+        let sv = |proves| SvCapability {
+            proves,
+            wide: true,
+            ..SvCapability::default()
+        };
+        assert_eq!(
+            node_features(&gates, false, sv(true)),
+            FEATURE_STANDARD_GATES | FEATURE_SV_STARK_V2 | FEATURE_SV_WIDE_LEAVES
+        );
+        assert_eq!(
+            node_features(&gates, false, sv(false)),
+            FEATURE_STANDARD_GATES
+        );
+        assert_eq!(FEATURE_SV_WIDE_LEAVES, 1 << 9);
     }
 }
