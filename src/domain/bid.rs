@@ -253,6 +253,7 @@ mod tests {
             sv_dynamic: false,
             sv_state_outputs: false,
             sv_segments: false,
+            sv_wide: false,
             work_budget_margin: 0.5,
             work_overhead_secs: 5.0,
             work_unknown_secs: 30.0,

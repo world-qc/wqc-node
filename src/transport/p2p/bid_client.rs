@@ -44,6 +44,7 @@ impl BidClient {
                 dynamic: self.config.sv_dynamic,
                 state_outputs: self.config.sv_state_outputs,
                 segments: self.config.sv_segments,
+                wide: self.config.sv_wide,
             },
         );
         if !bid::should_bid_on(&announcement, &self.config, supported_features) {
