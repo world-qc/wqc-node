@@ -42,7 +42,7 @@ pub fn host_memory_reserve_gib(total_gib: u64) -> u64 {
 
 /// Maximum WQC memory budget (bytes) from total physical RAM (bytes).
 /// Subtracts the reserve from the exact total, so the fraction of a GiB is kept
-/// (a 3.8 GiB host gets 2.8 GiB, not 2 GiB). Matches wqc-core.
+/// (a 3.8 GiB host gets 2.8 GiB, not 2 GiB). Matches wqc-core (same test vectors there).
 pub fn max_wqc_memory_bytes_from_total(total_bytes: u64) -> u64 {
     let reserve = host_memory_reserve_gib(total_bytes / GIB_U64).saturating_mul(GIB_U64);
     total_bytes.saturating_sub(reserve).max(GIB_U64)
@@ -209,9 +209,17 @@ mod tests {
 
     #[test]
     fn max_memory_examples() {
-        assert_eq!(max_wqc_memory_bytes_from_total(8 * GIB_U64), 7 * GIB_U64);
-        assert_eq!(max_wqc_memory_bytes_from_total(16 * GIB_U64), 14 * GIB_U64);
-        assert_eq!(max_wqc_memory_bytes_from_total(32 * GIB_U64), 30 * GIB_U64);
+        for (total, budget) in [(2, 1), (4, 3), (8, 7), (16, 14), (32, 30), (64, 62)] {
+            assert_eq!(
+                max_wqc_memory_bytes_from_total(total * GIB_U64),
+                budget * GIB_U64
+            );
+        }
+        let mib = 1024 * 1024;
+        assert_eq!(
+            max_wqc_memory_bytes_from_total(16 * GIB_U64 + 512 * mib),
+            14 * GIB_U64 + 512 * mib
+        );
     }
 
     #[test]
