@@ -40,20 +40,12 @@ pub fn host_memory_reserve_gib(total_gib: u64) -> u64 {
     }
 }
 
-/// Maximum WQC memory budget (GiB) from total physical RAM (GiB).
-pub fn max_wqc_memory_gib_from_total(total_gib: u64) -> u64 {
-    if total_gib == 0 {
-        return 1;
-    }
-    total_gib
-        .saturating_sub(host_memory_reserve_gib(total_gib))
-        .max(1)
-}
-
 /// Maximum WQC memory budget (bytes) from total physical RAM (bytes).
+/// Subtracts the reserve from the exact total, so the fraction of a GiB is kept
+/// (a 3.8 GiB host gets 2.8 GiB, not 2 GiB). Matches wqc-core.
 pub fn max_wqc_memory_bytes_from_total(total_bytes: u64) -> u64 {
-    let gib = total_bytes / GIB_U64;
-    max_wqc_memory_gib_from_total(gib).saturating_mul(GIB_U64)
+    let reserve = host_memory_reserve_gib(total_bytes / GIB_U64).saturating_mul(GIB_U64);
+    total_bytes.saturating_sub(reserve).max(GIB_U64)
 }
 
 /// Compact width whose χ=128 MPS workspace (`N · χ² · 32`) fits in `budget_bytes`.
@@ -192,10 +184,34 @@ mod tests {
     }
 
     #[test]
+    fn explicit_request_above_whole_gib_is_kept() {
+        let mib = 1024 * 1024;
+        // e2-medium reports about 3.83 GiB: cap 2.83 GiB, so 2.25 GiB is not cut to 2.
+        let total = 3 * GIB_U64 + 850 * mib;
+        assert_eq!(
+            max_wqc_memory_bytes_from_total(total),
+            2 * GIB_U64 + 850 * mib
+        );
+        assert_eq!(
+            effective_memory_bytes(Some(2.25), total),
+            2 * GIB_U64 + GIB_U64 / 4
+        );
+    }
+
+    #[test]
+    fn bytes_budget_is_at_least_one_gib() {
+        assert_eq!(max_wqc_memory_bytes_from_total(0), GIB_U64);
+        assert_eq!(
+            max_wqc_memory_bytes_from_total(GIB_U64 + GIB_U64 / 2),
+            GIB_U64
+        );
+    }
+
+    #[test]
     fn max_memory_examples() {
-        assert_eq!(max_wqc_memory_gib_from_total(8), 7);
-        assert_eq!(max_wqc_memory_gib_from_total(16), 14);
-        assert_eq!(max_wqc_memory_gib_from_total(32), 30);
+        assert_eq!(max_wqc_memory_bytes_from_total(8 * GIB_U64), 7 * GIB_U64);
+        assert_eq!(max_wqc_memory_bytes_from_total(16 * GIB_U64), 14 * GIB_U64);
+        assert_eq!(max_wqc_memory_bytes_from_total(32 * GIB_U64), 30 * GIB_U64);
     }
 
     #[test]
