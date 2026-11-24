@@ -83,7 +83,7 @@ cargo run --release
 | :--- | :--- | :--- |
 | `WQC_NODE_STAKE_WQC` | `0.05` | Parsed to Planck (pWQC) for bid `stake_amount`. Up to 18 fractional digits. |
 | `WQC_TESTNET_NODE_KEY` | — | **Public testnet:** Node Key from the dashboard (`nk_…`). Derives operator identity and `operator_sig` on bids. Without it, bids are rejected. |
-| `WQC_MAX_MEMORY_GB` | unset = host−reserve | WQC RAM budget (GiB). Unset/empty → **host total − reserve** (1 GiB if host < 16 GiB, else 2 GiB; see `memory_budget.rs`). Explicit values are capped the same way. With WebGPU, effective bid budget = `min(RAM, VRAM−1 GiB)`. Derives dense max qubits (`2^n × 16` bytes) and scalar `max_mps_qubits` (`N · 128² · 32`). Nodes with `< 10` dense max qubits never bid (`NETWORK_MIN_QUBITS`). |
+| `WQC_MAX_MEMORY_GB` | unset = host−reserve | WQC RAM budget (GiB). Unset/empty → **host total − reserve** (1 GiB if host < 16 GiB, else 2 GiB; see `memory_budget.rs`). Explicit values are capped the same way. With WebGPU, effective bid budget = `min(RAM, VRAM−1 GiB)`. Derives dense max qubits (`2^n × 16` bytes) and scalar `max_mps_qubits` (`N · 128² · 32` bytes within 80% of the budget). Nodes with `< 10` dense max qubits never bid (`NETWORK_MIN_QUBITS`). |
 | `WQC_COMPUTE_TIMEOUT_SECS` | `300` | Per-request timeout to core. A task that announces a shorter deadline uses that instead. |
 | `WQC_WORK_BUDGET_MARGIN` | `0.5` | Share of `min(deadline, WQC_COMPUTE_TIMEOUT_SECS)` announced work may use, queue included. |
 | `WQC_WORK_OVERHEAD_SECS` | `5` | Proving and transfer time added to every work estimate. |
@@ -101,16 +101,16 @@ cargo run --release
 `WQC_MAX_MEMORY_GB` is the main participant-facing sizing knob for **system RAM**.
 
 - Unset or empty → no operator request cap; effective RAM budget = **host physical RAM minus reserve** (1 GiB on hosts under 16 GiB total, otherwise 2 GiB)
-- An explicit value is still capped at that host−reserve ceiling — not a flat 80% rule
+- An explicit value is still capped at that host−reserve ceiling — not a flat 80% rule (the 80% below is the share of this budget one workload may take)
 - After connecting to core: if `tn_backend_active=webgpu` and `/sysinfo` reports `vram_budget_bytes`, bid envelope becomes `min(RAM_budget, VRAM_budget − 1 GiB)`; PCS remains RAM-only on core
 - Startup logs and `GET /status` expose `memory_cap_source` (`ram` or `vram`)
-- It then derives `max_qubits` from the dense envelope `2^n × 16` bytes, and `max_mps_qubits` from the χ=128 MPS workspace `N · χ² · 32`
+- It then derives `max_qubits` from the dense envelope `2^n × 16` bytes, and `max_mps_qubits` from the χ=128 MPS workspace: the largest `N` whose `N · χ² · 32` bytes fit 80% of the budget, like `sv_max_rows`. The 80% applies after the RAM/VRAM intersection, so a WebGPU node advertises 80% of `min(RAM, VRAM − 1 GiB)`; the dense width takes the whole budget
 - Both values are advertised. Scalar slices use `max_mps_qubits`. `sample_counts` and `expectation` stay on `max_qubits`
 
 Examples:
 
-- `1 GiB` budget → about `26` dense qubits, and `2048` MPS qubits
-- `16 GiB` budget → about `30` dense qubits, and `32768` MPS qubits
+- `1 GiB` budget → about `26` dense qubits, and `1638` MPS qubits
+- `16 GiB` budget → about `30` dense qubits, and `26214` MPS qubits
 
 If your node never bids, an overly small effective memory budget is one of the first things to check.
 
