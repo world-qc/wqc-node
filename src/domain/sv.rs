@@ -1,6 +1,8 @@
 //! v2 (sv-stark) leaves (docs `p2p-protocols.md` §5, §6.1): the largest leaf, in gate rows,
 //! this node advertises as `sv_max_rows` and accepts as `sv_leaf_rows`.
 
+use crate::memory_budget::MEMORY_SHARE;
+
 /// Protocol limit on a v2 leaf's gate rows.
 pub const SV_MAX_ROWS: u64 = 1 << 22;
 
@@ -10,8 +12,6 @@ const TTL_BASE_SECS: f64 = 90.0;
 const TTL_SECS_PER_ROW: f64 = 50e-6;
 const MAX_TTL_SECS: f64 = 330.0;
 
-/// Share of the memory budget a leaf may take.
-const MEMORY_SHARE: f64 = 0.8;
 /// A leaf's estimated time times this must fit the timeout.
 const TIME_MARGIN: f64 = 1.5;
 
