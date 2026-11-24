@@ -15,6 +15,10 @@ pub const HOST_MEMORY_RESERVE_LARGE_GIB: u64 = 2;
 /// Headroom subtracted from adapter VRAM budget before intersecting with RAM.
 pub const VRAM_MEMORY_RESERVE_GIB: u64 = 1;
 
+/// Share of the memory budget one workload may take: a v2 leaf (`sv_max_rows`) or a
+/// χ=128 MPS (`max_mps_qubits`). The rest covers the process and working buffers.
+pub const MEMORY_SHARE: f64 = 0.8;
+
 /// Which envelope limited the effective dense budget.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemoryCapSource {
@@ -48,16 +52,17 @@ pub fn max_wqc_memory_bytes_from_total(total_bytes: u64) -> u64 {
     total_bytes.saturating_sub(reserve).max(GIB_U64)
 }
 
-/// Compact width whose χ=128 MPS workspace (`N · χ² · 32`) fits in `budget_bytes`.
-/// The bid field is `u32`, so a wider budget advertises `u32::MAX` and no more.
+/// Compact width whose χ=128 MPS workspace (`N · χ² · 32`) fits in [`MEMORY_SHARE`] of
+/// `budget_bytes`. The bid field is `u32`, so a wider budget advertises `u32::MAX` and no more.
 pub fn max_qubits_from_mps_memory_budget(budget_bytes: u64) -> usize {
     let per_qubit = MPS_BOND_DIM
         .saturating_mul(MPS_BOND_DIM)
         .saturating_mul(MPS_SITE_FACTOR_BYTES);
-    if per_qubit == 0 || budget_bytes < per_qubit {
+    let usable = (budget_bytes as f64 * MEMORY_SHARE) as u64;
+    if per_qubit == 0 || usable < per_qubit {
         return 0;
     }
-    let width = (budget_bytes / per_qubit).min(u64::from(u32::MAX));
+    let width = (usable / per_qubit).min(u64::from(u32::MAX));
     usize::try_from(width).unwrap_or(usize::MAX)
 }
 
@@ -141,7 +146,8 @@ mod tests {
     fn one_gib_yields_26_qubits() {
         let gib = GIB_U64;
         assert_eq!(max_qubits_from_dense_memory_budget(gib), 26);
-        assert_eq!(max_qubits_from_mps_memory_budget(gib), 2048);
+        // 80% of 1 GiB over 512 KiB per site.
+        assert_eq!(max_qubits_from_mps_memory_budget(gib), 1638);
     }
 
     #[test]
@@ -196,6 +202,17 @@ mod tests {
             effective_memory_bytes(Some(2.25), total),
             2 * GIB_U64 + GIB_U64 / 4
         );
+    }
+
+    #[test]
+    fn mps_width_leaves_a_fifth_of_the_budget() {
+        // e2-medium on testnet: 2.25 GiB → 3686 sites (1.8 GiB of site tensors).
+        let budget = 2 * GIB_U64 + GIB_U64 / 4;
+        let width = max_qubits_from_mps_memory_budget(budget);
+        assert_eq!(width, 3686);
+        let per_site = MPS_BOND_DIM * MPS_BOND_DIM * MPS_SITE_FACTOR_BYTES;
+        assert!(width as u64 * per_site <= (budget as f64 * MEMORY_SHARE) as u64);
+        assert_eq!(max_qubits_from_mps_memory_budget(per_site), 0);
     }
 
     #[test]
