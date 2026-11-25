@@ -49,6 +49,7 @@ struct NodeMetrics {
     core_timeouts_total: IntCounter,
     tasks_total: IntCounterVec,
     result_deliveries_total: IntCounterVec,
+    results_oversize_total: IntCounter,
     tasks_pruned_total: IntCounter,
     tasks_rows: IntGaugeVec,
 }
@@ -140,6 +141,10 @@ impl NodeMetrics {
             ),
             &["attempt", "result"],
         )?;
+        let results_oversize_total = IntCounter::with_opts(Opts::new(
+            "wqc_node_results_oversize_total",
+            "Results over the proxy's size limit, reported as failures instead",
+        ))?;
         let tasks_pruned_total = IntCounter::with_opts(Opts::new(
             "wqc_node_tasks_pruned_total",
             "Terminal SQLite task rows deleted by the background prune loop",
@@ -165,6 +170,7 @@ impl NodeMetrics {
         registry.register(Box::new(core_timeouts_total.clone()))?;
         registry.register(Box::new(tasks_total.clone()))?;
         registry.register(Box::new(result_deliveries_total.clone()))?;
+        registry.register(Box::new(results_oversize_total.clone()))?;
         registry.register(Box::new(tasks_pruned_total.clone()))?;
         registry.register(Box::new(tasks_rows.clone()))?;
 
@@ -182,6 +188,7 @@ impl NodeMetrics {
             core_timeouts_total,
             tasks_total,
             result_deliveries_total,
+            results_oversize_total,
             tasks_pruned_total,
             tasks_rows,
         })
@@ -268,6 +275,10 @@ pub fn record_result_delivery(attempt: &str, result: &str) {
         .result_deliveries_total
         .with_label_values(&[attempt, result])
         .inc();
+}
+
+pub fn record_result_oversize() {
+    metrics().results_oversize_total.inc();
 }
 
 pub fn record_tasks_pruned(count: u64) {

@@ -6,6 +6,7 @@ use crate::application::pcs_open_call::{cached_open_call, clear_cached_open_call
 use crate::application::state::AppState;
 use crate::domain::models::{ComputeTask, Proof, PublicInputs};
 use crate::domain::pcs::{OpenCallPcsSource, PcsRequest, PendingPcsJob};
+use crate::domain::result::MAX_LARGE_BODY;
 use crate::infra::cas_client;
 use crate::transport::p2p::pcs_delivery::{
     build_pcs_refusal_wire_body, build_pcs_wire_body, send_pcs_wire,
@@ -43,10 +44,20 @@ fn is_cas_hash_mismatch(err: &anyhow::Error) -> bool {
     format!("{err:#}").contains("CAS leaf proof hash mismatch")
 }
 
+/// A body the proxy would drop on every retry.
+fn oversize_error(len: usize) -> Option<anyhow::Error> {
+    (len > MAX_LARGE_BODY)
+        .then(|| anyhow::anyhow!("PCS size: bundle of {len} bytes is over the 32 MiB limit"))
+}
+
 fn pcs_refuse_reason(err: &anyhow::Error) -> String {
     let msg = format!("{err:#}");
     msg.lines()
-        .find(|l| l.contains("PCS memory:") || l.contains("CAS leaf proof hash mismatch"))
+        .find(|l| {
+            l.contains("PCS memory:")
+                || l.contains("PCS size:")
+                || l.contains("CAS leaf proof hash mismatch")
+        })
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .unwrap_or("PCS memory: refused")
@@ -333,7 +344,7 @@ enum DeliverOutcome {
     SkippedInFlight,
     /// Core is in health-gate backoff; prove deferred (does not bump attempts).
     SkippedCoreDown,
-    /// Permanent refuse (memory gate or CAS hash mismatch); refusal sent, job cleared.
+    /// Permanent refuse (memory gate, CAS hash mismatch or size); refusal sent, job cleared.
     RefusedPermanent,
 }
 
@@ -413,6 +424,15 @@ async fn try_build_and_deliver(
         };
 
         let wire = build_pcs_wire_body(sub_task_id, &state.config.peer_id, &leaf_pcs_b64)?;
+        if let Some(err) = oversize_error(wire.len()) {
+            return report_permanent_refusal(
+                state.clone(),
+                orchestrator_pubkey,
+                sub_task_id,
+                &err,
+            )
+            .await;
+        }
         send_pcs_wire(state.clone(), &wire).await?;
         state
             .storage
@@ -618,6 +638,13 @@ pub fn spawn_retry_loop(state: Arc<AppState>) {
 mod tests {
     use super::*;
     use crate::infra::cas_client::sha256_hex;
+
+    #[test]
+    fn an_oversize_bundle_is_refused() {
+        assert!(oversize_error(MAX_LARGE_BODY).is_none());
+        let reason = pcs_refuse_reason(&oversize_error(MAX_LARGE_BODY + 1).expect("over"));
+        assert!(reason.contains("over the 32 MiB limit"), "{reason}");
+    }
 
     #[test]
     fn cas_hash_mismatch_is_permanent_refuse_reason() {

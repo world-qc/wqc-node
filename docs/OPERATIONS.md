@@ -146,7 +146,7 @@ If those appear, the node is usually ready to receive announcements and submit b
 2. **Bid** — If `required_features` and qubit caps match, mine lottery proof and send signed `Bid` on `/wqc/tensor-net/1.0.0`.
 3. **Dispatch** — Orchestrator pushes signed `SubTask` on `/wqc/tensor-dispatch/1.0.0` (pinned orchestrator PeerID + Ed25519 signature check).
 4. **Execute** — Validate circuit → persist SQLite → `POST /compute` to core.
-5. **Result** — Build P2P wire body → upsert `pending_results` → deliver on `/wqc/tensor-result/1.0.0` → delete row on ACK.
+5. **Result** — Build P2P wire body → upsert `pending_results` → deliver on `/wqc/tensor-result/1.0.0` → delete row on ACK. A body over 32 MiB is queued as a failure instead (the orchestrator's proxy would drop it every time).
 6. **Retry** — Background loop re-sends any remaining `pending_results` rows.
 
 ### Crash recovery
@@ -265,6 +265,7 @@ For public participants, this means:
 | `failed to mine lottery proof within time window` | `bid_difficulty` too high for 10s window |
 | `wqc-core returned error status` | Core down, timeout (`WQC_COMPUTE_TIMEOUT_SECS`), or OOM on large circuits |
 | Pending tasks stuck after restart | Expected until core completes; check core logs |
+| Task `failed` with `over the 32 MiB limit` | The result was too large to deliver (`wqc_node_results_oversize_total`); the orchestrator re-dispatches without slashing |
 | Result delivery failed | P2P disconnect; row kept in `pending_results` and **retried automatically** (check `GET /status` → `outbox_pending`) |
 
 ### Recommended triage order
