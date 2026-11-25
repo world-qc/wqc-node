@@ -1,3 +1,4 @@
+pub mod accept;
 pub mod announce_handler;
 pub mod bid_client;
 pub mod dispatch_handler;

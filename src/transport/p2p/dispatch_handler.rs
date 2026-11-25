@@ -1,42 +1,13 @@
 use std::sync::Arc;
 
-use futures::{AsyncReadExt, StreamExt};
-use libp2p::PeerId;
-use libp2p_stream::IncomingStreams;
+use futures::AsyncReadExt;
 
 use crate::application::accept_task;
 use crate::application::state::AppState;
 use crate::config::NodeConfig;
 use crate::domain::p2p::{verify_dispatch_signature, TaskDispatchMessage};
 
-pub fn spawn_dispatch_handler(
-    mut streams: IncomingStreams,
-    state: Arc<AppState>,
-    config: NodeConfig,
-    orchestrator_peer_id: PeerId,
-) {
-    tokio::spawn(async move {
-        while let Some((peer_id, stream)) = streams.next().await {
-            if peer_id != orchestrator_peer_id {
-                tracing::warn!(
-                    "[P2P Dispatch] Rejected subtask from unauthorized peer {}",
-                    peer_id
-                );
-                continue;
-            }
-
-            let state = state.clone();
-            let config = config.clone();
-            tokio::spawn(async move {
-                if let Err(e) = handle_dispatch_stream(state, config, stream).await {
-                    tracing::warn!("[P2P Dispatch] Failed to handle dispatch stream: {}", e);
-                }
-            });
-        }
-    });
-}
-
-async fn handle_dispatch_stream(
+pub async fn handle_dispatch_stream(
     state: Arc<AppState>,
     config: NodeConfig,
     mut stream: libp2p::Stream,
