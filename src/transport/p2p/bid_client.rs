@@ -2,9 +2,8 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use futures::{AsyncWriteExt, StreamExt};
 use libp2p::PeerId;
-use libp2p_stream::{Control, IncomingStreams};
+use libp2p_stream::Control;
 use tokio::sync::Mutex;
 
 use crate::application::state::AppState;
@@ -142,15 +141,4 @@ impl BidClient {
         );
         Ok(())
     }
-}
-
-/// Drain unsolicited inbound streams on the bid protocol.
-pub fn spawn_incoming_stream_sink(mut streams: IncomingStreams) {
-    tokio::spawn(async move {
-        while let Some((_peer, mut stream)) = streams.next().await {
-            if let Err(e) = stream.close().await {
-                tracing::debug!("[P2P Bid] Ignored inbound stream close error: {}", e);
-            }
-        }
-    });
 }

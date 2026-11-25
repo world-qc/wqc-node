@@ -1,8 +1,6 @@
 use std::sync::Arc;
 
-use futures::{AsyncReadExt, StreamExt};
-use libp2p::PeerId;
-use libp2p_stream::IncomingStreams;
+use futures::AsyncReadExt;
 
 use crate::application::pcs_outbox;
 use crate::application::state::AppState;
@@ -11,34 +9,7 @@ use crate::domain::pcs::{verify_pcs_request_signature, PcsRequestMessage};
 
 /// Handles orchestrator PCS requests: this node was picked as slice proof
 /// winner, so it is the only one that should build the leaf PCS bundle.
-pub fn spawn_pcs_request_handler(
-    mut streams: IncomingStreams,
-    state: Arc<AppState>,
-    config: NodeConfig,
-    orchestrator_peer_id: PeerId,
-) {
-    tokio::spawn(async move {
-        while let Some((peer_id, stream)) = streams.next().await {
-            if peer_id != orchestrator_peer_id {
-                tracing::warn!(
-                    "[P2P PCS Request] Rejected request from unauthorized peer {}",
-                    peer_id
-                );
-                continue;
-            }
-
-            let state = state.clone();
-            let config = config.clone();
-            tokio::spawn(async move {
-                if let Err(e) = handle_pcs_request_stream(state, config, stream).await {
-                    tracing::warn!("[P2P PCS Request] Failed to handle request: {}", e);
-                }
-            });
-        }
-    });
-}
-
-async fn handle_pcs_request_stream(
+pub async fn handle_pcs_request_stream(
     state: Arc<AppState>,
     config: NodeConfig,
     mut stream: libp2p::Stream,

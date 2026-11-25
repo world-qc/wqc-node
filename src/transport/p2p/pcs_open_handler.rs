@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use futures::{AsyncReadExt, StreamExt};
+use futures::AsyncReadExt;
 use libp2p::PeerId;
-use libp2p_stream::{Control, IncomingStreams};
+use libp2p_stream::Control;
 use tokio::sync::Mutex;
 
 use crate::application::pcs_open_call::{
@@ -15,39 +15,7 @@ use crate::transport::p2p::pcs_bid_client::submit_pcs_open_call_bid;
 
 /// Handles orchestrator CAS PCS open-call announcements.
 /// Spill-policy cores bid; refuse-policy cores stay silent.
-pub fn spawn_pcs_open_handler(
-    mut streams: IncomingStreams,
-    control: Arc<Mutex<Control>>,
-    state: Arc<AppState>,
-    config: NodeConfig,
-    orchestrator_peer_id: PeerId,
-) {
-    tokio::spawn(async move {
-        while let Some((peer_id, stream)) = streams.next().await {
-            if peer_id != orchestrator_peer_id {
-                tracing::warn!(
-                    "[P2P PCS Open] Rejected open call from unauthorized peer {}",
-                    peer_id
-                );
-                continue;
-            }
-
-            let control = control.clone();
-            let state = state.clone();
-            let config = config.clone();
-            tokio::spawn(async move {
-                if let Err(e) =
-                    handle_pcs_open_stream(control, state, config, orchestrator_peer_id, stream)
-                        .await
-                {
-                    tracing::warn!("[P2P PCS Open] Failed to handle open call: {}", e);
-                }
-            });
-        }
-    });
-}
-
-async fn handle_pcs_open_stream(
+pub async fn handle_pcs_open_stream(
     control: Arc<Mutex<Control>>,
     state: Arc<AppState>,
     config: NodeConfig,

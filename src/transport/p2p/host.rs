@@ -6,24 +6,31 @@ use futures::StreamExt;
 use libp2p::gossipsub::{self, IdentTopic, IdentityTransform, MessageAuthenticity};
 use libp2p::identify;
 use libp2p::swarm::{NetworkBehaviour, Swarm, SwarmEvent};
-use libp2p::{noise, tcp, yamux, Multiaddr, PeerId, StreamProtocol, SwarmBuilder};
+use libp2p::{noise, tcp, yamux, Multiaddr, PeerId, SwarmBuilder};
 use libp2p_stream as stream;
-use tokio::sync::Mutex;
+use tokio::sync::{mpsc, Mutex};
 use tokio::time::Sleep;
 
 use crate::application::state::AppState;
 use crate::config::{libp2p_keypair_from_signing_key, NodeConfig};
-use crate::domain::bid;
 use crate::domain::p2p::{
     parse_signed_announcement, ANNOUNCEMENT_TOPIC, PROTOCOL_ANNOUNCE, PROTOCOL_DISPATCH,
 };
 use crate::domain::pcs::{PROTOCOL_PCS_OPEN, PROTOCOL_PCS_REQUEST};
-use crate::domain::result::PROTOCOL_RESULT;
-use crate::transport::p2p::announce_handler::spawn_announce_handler;
-use crate::transport::p2p::bid_client::{spawn_incoming_stream_sink, BidClient};
-use crate::transport::p2p::dispatch_handler::spawn_dispatch_handler;
-use crate::transport::p2p::pcs_open_handler::spawn_pcs_open_handler;
-use crate::transport::p2p::pcs_request_handler::spawn_pcs_request_handler;
+use crate::transport::p2p::accept::{self, Accepted};
+use crate::transport::p2p::announce_handler::handle_announce_stream;
+use crate::transport::p2p::bid_client::BidClient;
+use crate::transport::p2p::dispatch_handler::handle_dispatch_stream;
+use crate::transport::p2p::pcs_open_handler::handle_pcs_open_stream;
+use crate::transport::p2p::pcs_request_handler::handle_pcs_request_stream;
+
+/// What the orchestrator opens to a node.
+const INBOUND_PROTOCOLS: [&str; 4] = [
+    PROTOCOL_DISPATCH,
+    PROTOCOL_ANNOUNCE,
+    PROTOCOL_PCS_REQUEST,
+    PROTOCOL_PCS_OPEN,
+];
 
 const BOOTSTRAP_REDIAL_INITIAL: Duration = Duration::from_secs(1);
 const BOOTSTRAP_REDIAL_MAX: Duration = Duration::from_secs(60);
@@ -135,6 +142,8 @@ fn schedule_bootstrap_redial(attempt: u32, sleep: &mut Option<Pin<Box<Sleep>>>) 
 struct NodeBehaviour {
     identify: identify::Behaviour,
     gossipsub: gossipsub::Behaviour<IdentityTransform>,
+    accept: accept::Behaviour,
+    /// Outbound streams only.
     stream: stream::Behaviour,
 }
 
@@ -150,6 +159,9 @@ async fn run(config: NodeConfig, state: Arc<AppState>) -> anyhow::Result<()> {
     let keypair = libp2p_keypair_from_signing_key(&config.signing_key)?;
     let local_peer_id = keypair.public().to_peer_id();
     let idle_timeout = Duration::from_secs(config.p2p_idle_timeout_secs);
+    let orchestrator_peer_id = config
+        .orchestrator_peer_id
+        .ok_or_else(|| anyhow::anyhow!("orchestrator peer id not configured"))?;
 
     // Small star mesh: default D=6 never forms with a single bootstrap peer.
     let gossipsub_config = gossipsub::ConfigBuilder::default()
@@ -170,6 +182,8 @@ async fn run(config: NodeConfig, state: Arc<AppState>) -> anyhow::Result<()> {
 
     let topic = IdentTopic::new(ANNOUNCEMENT_TOPIC);
 
+    let (accept_behaviour, accepted) =
+        accept::Behaviour::new(orchestrator_peer_id, &INBOUND_PROTOCOLS);
     let mut swarm = SwarmBuilder::with_existing_identity(keypair)
         .with_tokio()
         .with_tcp(
@@ -184,41 +198,12 @@ async fn run(config: NodeConfig, state: Arc<AppState>) -> anyhow::Result<()> {
             NodeBehaviour {
                 identify,
                 gossipsub: gossipsub_behaviour,
+                accept: accept_behaviour,
                 stream: stream::Behaviour::new(),
             }
         })?
         .with_swarm_config(|cfg| cfg.with_idle_connection_timeout(idle_timeout))
         .build();
-
-    let bid_protocol = StreamProtocol::new(bid::PROTOCOL_BID);
-    let announce_protocol = StreamProtocol::new(PROTOCOL_ANNOUNCE);
-    let dispatch_protocol = StreamProtocol::new(PROTOCOL_DISPATCH);
-    let mut register_control = swarm.behaviour().stream.new_control();
-    let bid_incoming = register_control
-        .accept(bid_protocol)
-        .map_err(|e| anyhow::anyhow!("failed to register bid stream protocol: {:?}", e))?;
-    spawn_incoming_stream_sink(bid_incoming);
-
-    let announce_incoming = register_control
-        .accept(announce_protocol)
-        .map_err(|e| anyhow::anyhow!("failed to register announce stream protocol: {:?}", e))?;
-
-    let dispatch_incoming = register_control
-        .accept(dispatch_protocol)
-        .map_err(|e| anyhow::anyhow!("failed to register dispatch stream protocol: {:?}", e))?;
-
-    let result_incoming = register_control
-        .accept(StreamProtocol::new(PROTOCOL_RESULT))
-        .map_err(|e| anyhow::anyhow!("failed to register result stream protocol: {:?}", e))?;
-    spawn_incoming_stream_sink(result_incoming);
-
-    let pcs_request_incoming = register_control
-        .accept(StreamProtocol::new(PROTOCOL_PCS_REQUEST))
-        .map_err(|e| anyhow::anyhow!("failed to register pcs request stream protocol: {:?}", e))?;
-
-    let pcs_open_incoming = register_control
-        .accept(StreamProtocol::new(PROTOCOL_PCS_OPEN))
-        .map_err(|e| anyhow::anyhow!("failed to register pcs open stream protocol: {:?}", e))?;
 
     let bid_control = Arc::new(Mutex::new(swarm.behaviour().stream.new_control()));
     {
@@ -226,37 +211,11 @@ async fn run(config: NodeConfig, state: Arc<AppState>) -> anyhow::Result<()> {
         *guard = Some(bid_control.clone());
     }
 
-    let orchestrator_peer_id = config
-        .orchestrator_peer_id
-        .ok_or_else(|| anyhow::anyhow!("orchestrator peer id not configured"))?;
-
-    spawn_announce_handler(
-        announce_incoming,
+    spawn_stream_router(
+        accepted,
         bid_control.clone(),
         config.clone(),
         state.clone(),
-        orchestrator_peer_id,
-    );
-
-    spawn_dispatch_handler(
-        dispatch_incoming,
-        state.clone(),
-        config.clone(),
-        orchestrator_peer_id,
-    );
-
-    spawn_pcs_request_handler(
-        pcs_request_incoming,
-        state.clone(),
-        config.clone(),
-        orchestrator_peer_id,
-    );
-
-    spawn_pcs_open_handler(
-        pcs_open_incoming,
-        bid_control.clone(),
-        state.clone(),
-        config.clone(),
         orchestrator_peer_id,
     );
 
@@ -321,6 +280,39 @@ async fn run(config: NodeConfig, state: Arc<AppState>) -> anyhow::Result<()> {
             }
         }
     }
+}
+
+/// Handles each accepted stream on its own task.
+fn spawn_stream_router(
+    mut accepted: mpsc::Receiver<Accepted>,
+    control: Arc<Mutex<stream::Control>>,
+    config: NodeConfig,
+    state: Arc<AppState>,
+    orchestrator_peer_id: PeerId,
+) {
+    tokio::spawn(async move {
+        while let Some(Accepted { protocol, stream }) = accepted.recv().await {
+            let (control, config, state) = (control.clone(), config.clone(), state.clone());
+            tokio::spawn(async move {
+                let result = match protocol {
+                    PROTOCOL_DISPATCH => handle_dispatch_stream(state, config, stream).await,
+                    PROTOCOL_ANNOUNCE => {
+                        handle_announce_stream(stream, control, config, state, orchestrator_peer_id)
+                            .await
+                    }
+                    PROTOCOL_PCS_REQUEST => handle_pcs_request_stream(state, config, stream).await,
+                    PROTOCOL_PCS_OPEN => {
+                        handle_pcs_open_stream(control, state, config, orchestrator_peer_id, stream)
+                            .await
+                    }
+                    other => Err(anyhow::anyhow!("no handler for {other}")),
+                };
+                if let Err(e) = result {
+                    tracing::warn!("[P2P] Failed to handle {protocol} stream: {e}");
+                }
+            });
+        }
+    });
 }
 
 #[allow(clippy::too_many_arguments)]
