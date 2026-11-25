@@ -268,4 +268,69 @@ mod tests {
         }
         assert!(accepted.try_recv().is_err());
     }
+
+    /// Dials a peer that has `key`, as a node dials the orchestrator's proxy,
+    /// and returns the peer's stream control.
+    async fn dialed(key: identity::Keypair, node: &mut Swarm<Behaviour>) -> libp2p_stream::Control {
+        let mut peer = swarm(key, libp2p_stream::Behaviour::new());
+        peer.listen_on("/ip4/127.0.0.1/tcp/0".parse().unwrap())
+            .unwrap();
+        let addr = loop {
+            if let SwarmEvent::NewListenAddr { address, .. } = peer.select_next_some().await {
+                break address;
+            }
+        };
+        let control = peer.behaviour().new_control();
+        node.dial(addr.with_p2p(*peer.local_peer_id()).unwrap())
+            .unwrap();
+        let (connected, mut done) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            while !matches!(
+                peer.select_next_some().await,
+                SwarmEvent::ConnectionEstablished { .. }
+            ) {}
+            let _ = connected.send(());
+            loop {
+                peer.select_next_some().await;
+            }
+        });
+        loop {
+            tokio::select! {
+                _ = &mut done => return control,
+                _ = node.select_next_some() => {}
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn accepts_only_the_given_peer_on_connections_the_node_dialed() {
+        let protocol = StreamProtocol::new(PROTOCOL);
+        let orchestrator = identity::Keypair::generate_ed25519();
+        let (behaviour, mut accepted) =
+            Behaviour::new(orchestrator.public().to_peer_id(), &[PROTOCOL]);
+        let mut node = swarm(identity::Keypair::generate_ed25519(), behaviour);
+        let node_id = *node.local_peer_id();
+        let mut other = dialed(identity::Keypair::generate_ed25519(), &mut node).await;
+        let mut control = dialed(orchestrator, &mut node).await;
+        tokio::spawn(async move {
+            loop {
+                node.select_next_some().await;
+            }
+        });
+
+        assert!(matches!(
+            other.open_stream(node_id, protocol.clone()).await,
+            Err(libp2p_stream::OpenStreamError::UnsupportedProtocol(_))
+        ));
+        let mut stream = control.open_stream(node_id, protocol).await.unwrap();
+        stream.write_all(b"x").await.unwrap();
+        stream.close().await.unwrap();
+        let mut got = tokio::time::timeout(Duration::from_secs(5), accepted.recv())
+            .await
+            .expect("the stream was not accepted")
+            .unwrap();
+        let mut body = Vec::new();
+        got.stream.read_to_end(&mut body).await.unwrap();
+        assert_eq!(body, b"x");
+    }
 }
