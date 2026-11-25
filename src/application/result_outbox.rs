@@ -3,9 +3,32 @@ use std::time::Duration;
 
 use crate::application::state::AppState;
 use crate::domain::models::{ComputeTask, TaskResultPayload};
+use crate::domain::result::ResultMessage;
 use crate::transport::p2p::result_delivery::{build_result_wire_body, send_result_wire};
 
 const DEFAULT_RETRY_INTERVAL_SECS: u64 = 5;
+
+/// The largest result body the orchestrator's proxy reads (wqc-docs
+/// spec/p2p-protocols.md §2.2).
+const MAX_RESULT_BODY: usize = 32 << 20;
+
+/// The failure to send instead of a body over [`MAX_RESULT_BODY`], which the
+/// proxy would drop on every retry.
+fn oversize_failure(
+    body: &[u8],
+    sub_task_id: &str,
+    node_id: &str,
+) -> anyhow::Result<Option<Vec<u8>>> {
+    if body.len() <= MAX_RESULT_BODY {
+        return Ok(None);
+    }
+    let error = format!(
+        "result of {} bytes is over the {MAX_RESULT_BODY} byte limit",
+        body.len()
+    );
+    tracing::error!("[Result Outbox] sub_task_id={sub_task_id}: {error}");
+    ResultMessage::failure_json_bytes(sub_task_id, node_id, &error).map(Some)
+}
 
 /// Persists the P2P wire payload, updates task status, and attempts delivery.
 pub async fn deliver_result(
@@ -16,17 +39,18 @@ pub async fn deliver_result(
     let sub_task_id = task.request.task_id.clone();
     let orchestrator_pubkey = task.orchestrator_pubkey.clone();
 
-    let wire_body = build_result_wire_body(task, payload, &state.config.peer_id)?;
+    let mut wire_body = build_result_wire_body(task, payload, &state.config.peer_id)?;
+    let mut succeeded = payload.status != "error";
+    if let Some(failure) = oversize_failure(&wire_body, &sub_task_id, &state.config.peer_id)? {
+        wire_body = failure;
+        succeeded = false;
+    }
 
     state
         .storage
         .upsert_pending_result(&orchestrator_pubkey, &sub_task_id, &wire_body)?;
 
-    let status = if payload.status == "error" {
-        "failed"
-    } else {
-        "completed"
-    };
+    let status = if succeeded { "completed" } else { "failed" };
     if let Err(e) = state
         .storage
         .update_status(&orchestrator_pubkey, &sub_task_id, status)
@@ -44,7 +68,7 @@ pub async fn deliver_result(
         &orchestrator_pubkey,
         &sub_task_id,
         &wire_body,
-        payload,
+        succeeded.then_some(payload),
         task,
     )
     .await
@@ -55,7 +79,7 @@ async fn try_deliver_pending(
     orchestrator_pubkey: &str,
     sub_task_id: &str,
     wire_body: &[u8],
-    payload: &TaskResultPayload,
+    payload: Option<&TaskResultPayload>,
     task: &ComputeTask,
 ) -> anyhow::Result<()> {
     match send_result_wire(state.clone(), wire_body).await {
@@ -74,7 +98,7 @@ async fn try_deliver_pending(
                 "[Result Outbox] Delivered sub_task_id={} to orchestrator",
                 sub_task_id
             );
-            if payload.status == "success" {
+            if let Some(payload) = payload.filter(|p| p.status == "success") {
                 if let Some(proof) = payload.proof.as_ref() {
                     crate::application::pcs_outbox::retain_after_result(state.clone(), task, proof);
                 }
@@ -126,7 +150,14 @@ pub fn spawn_retry_loop(state: Arc<AppState>) {
                 pending.len()
             );
 
-            for entry in pending {
+            for mut entry in pending {
+                // Queued by a version without the check.
+                match oversize_failure(&entry.wire_body, &entry.sub_task_id, &state.config.peer_id)
+                {
+                    Ok(Some(failure)) => entry.wire_body = failure,
+                    Ok(None) => {}
+                    Err(e) => tracing::error!("[Result Outbox] {e}"),
+                }
                 match send_result_wire(state.clone(), &entry.wire_body).await {
                     Ok(()) => {
                         crate::infra::metrics::record_result_delivery("retry", "ok");
@@ -204,5 +235,25 @@ fn extract_proof_from_result_wire(
     match proof {
         Some(p) if !p.is_null() => Ok(Some(serde_json::from_value(p)?)),
         _ => Ok(None),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_oversize_body_becomes_a_failure() {
+        assert!(oversize_failure(&vec![b'x'; MAX_RESULT_BODY], "s", "n")
+            .unwrap()
+            .is_none());
+        let body = oversize_failure(&vec![b'x'; MAX_RESULT_BODY + 1], "s", "n")
+            .unwrap()
+            .expect("over the limit");
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["sub_task_id"], "s");
+        assert_eq!(v["node_id"], "n");
+        assert!(v["error"].as_str().unwrap().contains("over the"));
+        assert!(extract_proof_from_result_wire(&body).unwrap().is_none());
     }
 }
