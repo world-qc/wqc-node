@@ -2,6 +2,10 @@ use crate::domain::models::{ComplexResult, ExpectationResult, Proof, SampleResul
 
 pub const PROTOCOL_RESULT: &str = "/wqc/tensor-result/1.0.0";
 
+/// The largest result or leaf PCS body the orchestrator's proxy reads
+/// (wqc-docs spec/p2p-protocols.md §2.2).
+pub const MAX_LARGE_BODY: usize = 32 << 20;
+
 /// ResultMessage mirrors the orchestrator P2P result stream payload.
 pub struct ResultMessage {
     pub sub_task_id: String,
